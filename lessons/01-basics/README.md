@@ -1,5 +1,8 @@
 # 01 — Basics: modelling a Pod
 
+> **New to these concepts? Start with the tutorial:** open [`tutorial.html`](tutorial.html) in a browser
+> (`open lessons/01-basics/tutorial.html`). This README is a quick reference for while you code.
+
 Goal: implement the `TODO`s in `pod.go` until `go test ./lessons/01-basics/` passes.
 
 ## Concepts you need

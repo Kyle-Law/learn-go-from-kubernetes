@@ -1,5 +1,8 @@
 # 02 — Interfaces & errors: a toy API server
 
+> **New to these concepts? Start with the tutorial:** open [`tutorial.html`](tutorial.html) in a browser
+> (`open lessons/02-interfaces-errors/tutorial.html`). This README is a quick reference for while you code.
+
 Goal: implement the `TODO`s in `object.go`, `errors.go`, and `store.go` until
 `go test ./lessons/02-interfaces-errors/` passes. Suggested order is the same:
 objects → errors → store.

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 02 · Interfaces &amp; Errors</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/tutorial.css">
+</head>
+<body>
+<div class="progress" aria-hidden="true"></div>
+<div class="layout">
+  <nav class="toc" aria-label="Contents">
+    <details open>
+      <summary>Lesson 02 contents</summary>
+      <ol></ol>
+      <p class="score" aria-live="polite"></p>
+    </details>
+  </nav>
+
+  <article>
+    <header>
+      <p class="eyebrow">lessons/02-interfaces-errors</p>
+      <h1>Interfaces and errors: a toy API server</h1>
+      <p class="lede"><code>kubectl get</code> works on Pods, ConfigMaps and CRDs it has never heard of, and every client-go call can fail with a <code>NotFound</code> or <code>Conflict</code>. This tutorial covers the two Go features behind that: interfaces and error values.</p>
+      <ul class="meta">
+        <li>About 35 minutes</li>
+        <li>10 self-checks</li>
+        <li>Then: <code>object.go</code>, <code>errors.go</code>, <code>store.go</code></li>
+      </ul>
+    </header>
+
+    <!-- ===================================================== -->
+    <section id="why-interfaces">
+      <h2 data-short="Why interfaces">Why interfaces?</h2>
+      <p>Suppose you want one function that can print the name of any Kubernetes object. In lesson 1 every function took a concrete type like <code>Pod</code>. To accept "anything with a name" you describe the <em>behaviour</em> you need, not the type:</p>
+      <pre class="go"><code>
+type Named interface {
+	GetName() string
+}
+
+func printName(obj Named) {
+	fmt.Println(obj.GetName())
+}
+</code></pre>
+      <p>An interface is a list of method signatures. Any value whose type has those methods can be passed to <code>printName</code>.</p>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>controller-runtime's <code>client.Object</code> is an interface combining <code>metav1.Object</code> (<code>GetName</code>, <code>GetNamespace</code>, <code>GetLabels</code>, …) and <code>runtime.Object</code>. That's why <code>client.Get(ctx, key, obj)</code> works for Pods, Deployments and your own CRDs alike.</p>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="implicit">
+      <h2 data-short="Implicit satisfaction">Interfaces are satisfied implicitly</h2>
+      <p>There's no <code>implements</code> keyword. If a type has the methods, it satisfies the interface, even if its author never heard of the interface.</p>
+      <pre class="go"><code>
+type Scalable interface {
+	Scale(replicas int32)
+	CurrentReplicas() int32
+}
+
+type Deployment struct{ replicas int32 }
+func (d *Deployment) Scale(n int32)          { d.replicas = n }
+func (d *Deployment) CurrentReplicas() int32 { return d.replicas }
+
+type StatefulSet struct{ replicas int32 }
+func (s *StatefulSet) Scale(n int32)          { s.replicas = n }
+func (s *StatefulSet) CurrentReplicas() int32 { return s.replicas }
+
+func scaleToZero(objs []Scalable) {
+	for _, o := range objs {
+		o.Scale(0)
+	}
+}
+
+scaleToZero([]Scalable{&amp;Deployment{replicas: 3}, &amp;StatefulSet{replicas: 2}})
+</code></pre>
+      <p>Two consequences:</p>
+      <ul>
+        <li><strong>Interfaces belong to the code that uses them.</strong> You can define a small interface next to the function that needs it, and existing types satisfy it with no changes.</li>
+        <li><strong>Keep interfaces small.</strong> The most-used ones have a single method: <code>error</code> (<code>Error() string</code>), <code>fmt.Stringer</code> (<code>String() string</code>), <code>io.Reader</code> (<code>Read</code>).</li>
+      </ul>
+
+      <h3>Compile-time checks</h3>
+      <p>Because nothing declares "this type implements that interface", Go code often adds a line that makes the compiler verify it:</p>
+      <pre class="go"><code>
+var _ Scalable = &amp;Deployment{} // fails to build if *Deployment stops satisfying Scalable
+</code></pre>
+      <p>The <code>_</code> means "I don't need this variable". You'll see this line all over Kubernetes, and at the top of <code>object_test.go</code>.</p>
+
+      <div class="check" id="l2-implicit">
+        <p class="prompt">You add a <code>type DaemonSet struct{...}</code> with <code>Scale(int32)</code> but forget <code>CurrentReplicas()</code>. What happens when you pass <code>&amp;DaemonSet{}</code> to <code>scaleToZero</code>?</p>
+        <div class="options">
+          <button>It works, because `scaleToZero` only calls `Scale`</button>
+          <button data-ok>Compile error: `*DaemonSet` does not implement `Scalable` (missing method `CurrentReplicas`)</button>
+          <button>It compiles, then panics when `CurrentReplicas` is called</button>
+        </div>
+        <div class="explain"><p>A type must have <em>every</em> method in the interface, and the compiler checks this where the value is converted to the interface. It doesn't matter which methods the function happens to call.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="method-sets">
+      <h2 data-short="Pointer receivers & interfaces">Pointer receivers and interfaces</h2>
+      <p>In the example above, the methods have pointer receivers, <code>(d *Deployment)</code>. That means <strong><code>*Deployment</code> satisfies <code>Scalable</code>, but <code>Deployment</code> does not</strong>:</p>
+      <pre class="go"><code>
+var a Scalable = &amp;Deployment{} // OK
+var b Scalable = Deployment{}  // compile error: method Scale has pointer receiver
+</code></pre>
+      <p>When you <em>call</em> <code>d.Scale(3)</code> on a variable, Go takes <code>&amp;d</code> for you. When it checks whether a type satisfies an interface, it doesn't: the set of methods on <code>Deployment</code> (its <strong>method set</strong>) only includes value-receiver methods.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Method declared on</th><th>In method set of <code>T</code>?</th><th>In method set of <code>*T</code>?</th></tr></thead>
+          <tbody>
+            <tr><td><code>func (t T) M()</code></td><td>yes</td><td>yes</td></tr>
+            <tr><td><code>func (t *T) M()</code></td><td>no</td><td>yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Kubernetes types put their methods on pointers, so you always pass <code>&amp;corev1.Pod{}</code> to the client, never <code>corev1.Pod{}</code>.</p>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="embedding">
+      <h2 data-short="Embedding">Embedding: shared metadata</h2>
+      <p>Every Kubernetes resource has <code>metadata</code> with a name, namespace and labels. Go shares that structure by <strong>embedding</strong> a struct: listing its type without a field name.</p>
+      <pre class="go"><code>
+type ObjectMeta struct {
+	Name      string
+	Namespace string
+}
+
+func (m *ObjectMeta) FullName() string { return m.Namespace + "/" + m.Name }
+
+type Secret struct {
+	ObjectMeta              // embedded: no field name
+	Data map[string][]byte
+}
+
+s := &amp;Secret{ObjectMeta: ObjectMeta{Name: "db-creds", Namespace: "prod"}}
+fmt.Println(s.Name)        // promoted field: really s.ObjectMeta.Name
+fmt.Println(s.FullName())  // promoted method: "prod/db-creds"
+</code></pre>
+      <p>The embedded struct's fields <em>and methods</em> are <strong>promoted</strong> to the outer type. Promoted methods count toward interfaces: if an interface needs <code>FullName()</code>, <code>*Secret</code> now satisfies it.</p>
+      <p>In a composite literal, the embedded field's name is its type name: <code>ObjectMeta: ObjectMeta{...}</code>.</p>
+
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p>Embedding is <strong>composition, not inheritance</strong>. A <code>*Secret</code> is not an <code>*ObjectMeta</code>: you can't pass one where the other is expected. If you need the inner value, ask for it: <code>&amp;s.ObjectMeta</code>. For "works with many types", use an interface.</p>
+      </div>
+      <p>If the outer type defines a field or method with the same name, the outer one wins (it "shadows" the embedded one). The embedded one is still reachable as <code>s.ObjectMeta.Name</code>.</p>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Every real type looks like <code>type Pod struct { metav1.TypeMeta; metav1.ObjectMeta; Spec PodSpec; Status PodStatus }</code>. <code>ObjectMeta</code> has the <code>GetName()</code>, <code>GetLabels()</code>… methods, and embedding is how every resource gets them and satisfies <code>metav1.Object</code>.</p>
+      </div>
+
+      <div class="check" id="l2-embed">
+        <p class="prompt">Given the <code>Secret</code> type above, which line compiles?</p>
+        <div class="options">
+          <button>`var m *ObjectMeta = s`</button>
+          <button data-ok>`var m *ObjectMeta = &amp;s.ObjectMeta`</button>
+          <button>`var m *ObjectMeta = s.(*ObjectMeta)`</button>
+        </div>
+        <div class="explain"><p>The embedded value is a field named <code>ObjectMeta</code>; take its address to get an <code>*ObjectMeta</code>. There's no subtype relationship, and <code>.(...)</code> only works on interface values.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="type-switches">
+      <h2 data-short="Assertions & type switches">Type assertions and type switches</h2>
+      <p>An interface variable hides the concrete type. You can only call the interface's methods on it:</p>
+      <pre class="go"><code>
+var obj Named = &amp;Secret{...}
+obj.GetName()      // OK: GetName is in the interface
+obj.Data           // compile error: Named has no field Data
+</code></pre>
+      <p>Checking something like <code>obj.GetKind() == "Secret"</code> doesn't help: the compiler only knows the static type, <code>Named</code>. To get the concrete type back, use a <strong>type assertion</strong>:</p>
+      <pre class="go"><code>
+s, ok := obj.(*Secret)   // ok is false (and s is nil) if obj isn't a *Secret
+if ok {
+	fmt.Println(len(s.Data))
+}
+
+s := obj.(*Secret)       // single-value form: PANICS if obj isn't a *Secret
+</code></pre>
+
+      <h3>Type switches</h3>
+      <p>To handle several possible types, use a type switch. In each case, the variable has that case's concrete type:</p>
+      <pre class="go"><code>
+func size(obj Named) int {
+	switch o := obj.(type) {
+	case *Secret:
+		return len(o.Data)            // o is *Secret here
+	case *ServiceAccount:
+		return len(o.Secrets)         // o is *ServiceAccount here
+	default:
+		return 0                      // o is still Named here
+	}
+}
+</code></pre>
+      <p>The empty interface, <code>any</code> (also written <code>interface{}</code>), has no methods, so every value satisfies it. You'll use assertions on <code>any</code> values often.</p>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Informer event handlers receive <code>obj interface{}</code>. On delete, it can be either your type or a <code>cache.DeletedFinalStateUnknown</code> tombstone, so real controllers use a comma-ok assertion or a type switch, never the panicking form.</p>
+      </div>
+
+      <div class="check" id="l2-switch-multi">
+        <p class="prompt">What is the type of <code>o</code> inside this case?</p>
+        <pre class="go"><code>
+switch o := obj.(type) {
+case *Secret, *ServiceAccount:
+	// ...
+}
+</code></pre>
+        <div class="options">
+          <button>`*Secret` or `*ServiceAccount`, whichever it really is</button>
+          <button data-ok>`Named`, the interface type</button>
+          <button>`any`</button>
+        </div>
+        <div class="explain"><p><code>o</code> only gets a concrete type in a case that lists exactly one type. With two, Go can't pick, so <code>o</code> keeps the switched-on interface type. Use separate cases if you need the fields.</p></div>
+      </div>
+
+      <div class="check" id="l2-assert-panic">
+        <p class="prompt"><code>obj</code> holds a <code>*ServiceAccount</code>. What does <code>s := obj.(*Secret)</code> do?</p>
+        <div class="options">
+          <button>Sets `s` to `nil`</button>
+          <button data-ok>Panics: interface conversion</button>
+          <button>Compile error</button>
+        </div>
+        <div class="explain"><p>The single-value form panics on a mismatch. Use <code>s, ok := obj.(*Secret)</code> unless you're certain of the type.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="errors-values">
+      <h2 data-short="Errors are values">Errors are values</h2>
+      <p>Go has no exceptions. A function that can fail returns an <code>error</code> as its last result, and the caller checks it right away:</p>
+      <pre class="go"><code>
+data, err := os.ReadFile("deployment.yaml")
+if err != nil {
+	return fmt.Errorf("reading manifest: %w", err)
+}
+// use data
+</code></pre>
+      <ul>
+        <li><code>if err != nil { return ... }</code> is the most common line in Go. It's deliberate: every failure point is visible.</li>
+        <li><strong>Convention:</strong> when <code>err != nil</code>, the other results are zero values and the caller shouldn't use them. When you return an error, return <code>nil</code>/<code>0</code>/<code>""</code> for the rest.</li>
+        <li>When there's no error, return a literal <code>nil</code>.</li>
+      </ul>
+
+      <h3><code>error</code> is just an interface</h3>
+      <pre class="go"><code>
+type error interface {
+	Error() string
+}
+</code></pre>
+      <p>Anything with an <code>Error() string</code> method is an error. That means you can make your own error types that carry extra data:</p>
+      <pre class="go"><code>
+type QuotaError struct {
+	Resource string
+	Limit    int
+}
+
+func (e *QuotaError) Error() string {
+	return fmt.Sprintf("exceeded quota for %s (limit %d)", e.Resource, e.Limit)
+}
+
+func createPod(n int) error {
+	if n > 10 {
+		return &amp;QuotaError{Resource: "pods", Limit: 10}
+	}
+	return nil
+}
+</code></pre>
+
+      <h3>Two kinds of errors you'll define</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Kind</th><th>Looks like</th><th>Use when</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Sentinel</strong> value</td><td><code>var ErrNoNodes = errors.New("no nodes available")</code></td><td>the caller only needs to know <em>which</em> error</td></tr>
+            <tr><td>Custom <strong>type</strong></td><td><code>type QuotaError struct{...}</code></td><td>the caller needs details (a code, a field name, a limit)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="check" id="l2-zero-on-error">
+        <p class="prompt">A lookup function's signature is <code>func findNode(name string) (*Node, error)</code>. The node doesn't exist. What should it return?</p>
+        <div class="options">
+          <button>`&amp;Node{}, ErrNodeNotFound`</button>
+          <button data-ok>`nil, ErrNodeNotFound`</button>
+          <button>`nil, nil`</button>
+        </div>
+        <div class="explain"><p>On failure, return zero values for everything except the error. Returning an empty <code>&amp;Node{}</code> invites callers to use a fake node; <code>nil, nil</code> hides the failure entirely.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="wrapping">
+      <h2 data-short="Wrapping, Is & As">Wrapping errors, <code>errors.Is</code> and <code>errors.As</code></h2>
+      <p>As an error travels up the call stack, each layer adds context with <code>fmt.Errorf</code>:</p>
+      <pre class="go"><code>
+err := createPod(12)
+err = fmt.Errorf("scaling web: %w", err)
+err = fmt.Errorf("reconciling default/web: %w", err)
+fmt.Println(err)
+// reconciling default/web: scaling web: exceeded quota for pods (limit 10)
+</code></pre>
+      <p>The <code>%w</code> verb <strong>wraps</strong>: the new error keeps a reference to the original, forming a chain. Callers can then search that chain.</p>
+
+      <h3><code>errors.Is</code>: "is this specific error somewhere in the chain?"</h3>
+      <pre class="go"><code>
+if errors.Is(err, ErrNoNodes) {
+	// retry later
+}
+</code></pre>
+
+      <h3><code>errors.As</code>: "is there an error of this <em>type</em> in the chain? Give it to me."</h3>
+      <pre class="go"><code>
+var qe *QuotaError
+if errors.As(err, &amp;qe) {
+	fmt.Println("limit was", qe.Limit) // qe now points at the QuotaError in the chain
+}
+</code></pre>
+      <p>You pass a <em>pointer to</em> your variable (<code>&amp;qe</code>) so <code>errors.As</code> has somewhere to store the match.</p>
+
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p><code>%v</code> only copies the error's <em>text</em> into a new error. The chain is broken, so <code>errors.Is</code> and <code>errors.As</code> can no longer find the original. Use <code>%w</code> when you return an error with added context.</p>
+      </div>
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p>Never decide what to do by comparing error text (<code>err.Error() == "..."</code> or <code>strings.Contains</code>). Messages are for humans and change. Check values with <code>errors.Is</code> and types with <code>errors.As</code>.</p>
+      </div>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>client-go returns <code>*apierrors.StatusError</code>, which carries a <strong>reason</strong> (<code>NotFound</code>, <code>AlreadyExists</code>, <code>Conflict</code>, …) and an HTTP code. Helpers like <code>apierrors.IsNotFound(err)</code> use <code>errors.As</code> to find it and check the reason. Controllers branch on these constantly: not found usually means "it was deleted, nothing to do"; conflict means "re-read and retry". Check the <em>reason</em>, not just the code: <code>AlreadyExists</code> and <code>Conflict</code> are both HTTP 409.</p>
+      </div>
+
+      <div class="check" id="l2-wrap-v">
+        <p class="prompt"><code>err</code> wraps a <code>*QuotaError</code>. After this line, does <code>errors.As(wrapped, &amp;qe)</code> find it?</p>
+        <pre class="go"><code>
+wrapped := fmt.Errorf("reconcile failed: %v", err)
+</code></pre>
+        <div class="options">
+          <button>Yes, `errors.As` searches the whole message</button>
+          <button data-ok>No: `%v` produced a new error with the same text but no chain</button>
+          <button>Yes, any `fmt.Errorf` call wraps</button>
+        </div>
+        <div class="explain"><p>Only <code>%w</code> wraps. With <code>%v</code>, the original error and its type are gone.</p></div>
+      </div>
+
+      <div class="check" id="l2-as-pointer">
+        <p class="prompt">What's wrong here?</p>
+        <pre class="go"><code>
+var qe *QuotaError
+if errors.As(err, qe) {
+	fmt.Println(qe.Limit)
+}
+</code></pre>
+        <div class="options">
+          <button>Nothing; it's correct</button>
+          <button>It always returns false</button>
+          <button data-ok>It panics: the target must be a non-nil pointer (it should be `&amp;qe`)</button>
+        </div>
+        <div class="explain"><p><code>qe</code> is a nil <code>*QuotaError</code>, which gives <code>errors.As</code> nowhere to write. It compiles because the parameter is <code>any</code>, but <code>go vet</code> flags it.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="nil-trap">
+      <h2 data-short="The nil interface trap">The nil interface trap</h2>
+      <p>An interface value holds two things: a <strong>type</strong> and a <strong>value</strong>. It equals <code>nil</code> only when <em>both</em> are nil.</p>
+      <pre class="go"><code>
+func check() error {
+	var qe *QuotaError   // nil pointer
+	if quotaExceeded() {
+		qe = &amp;QuotaError{Resource: "pods", Limit: 10}
+	}
+	return qe            // BUG when quota is fine
+}
+
+err := check()
+fmt.Println(err == nil) // false! err holds (type=*QuotaError, value=nil)
+</code></pre>
+      <p>The caller sees a non-nil error, and calling <code>err.Error()</code> may then panic on the nil pointer. The fix: return a literal <code>nil</code> on the success path.</p>
+      <pre class="go"><code>
+func check() error {
+	if quotaExceeded() {
+		return &amp;QuotaError{Resource: "pods", Limit: 10}
+	}
+	return nil
+}
+</code></pre>
+      <p>It's fine for constructors to return a concrete pointer type like <code>*QuotaError</code>; just don't store a possibly-nil typed pointer in an <code>error</code> and return it.</p>
+
+      <div class="check" id="l2-nil-iface">
+        <p class="prompt">An interface variable holds <code>(type=*Pod, value=nil)</code>. Is it <code>== nil</code>?</p>
+        <div class="options">
+          <button>Yes, the pointer inside is nil</button>
+          <button data-ok>No, it has a type, so it isn't nil</button>
+          <button>Comparing interfaces to nil doesn't compile</button>
+        </div>
+        <div class="explain"><p>An interface is <code>nil</code> only when it has no type and no value. A typed nil pointer inside makes it non-nil.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="store">
+      <h2 data-short="Map-backed stores & sorting">Map-backed stores and sorting</h2>
+      <p>The exercise builds an in-memory store, like a tiny etcd. A few patterns make that straightforward.</p>
+
+      <h3>Composite keys</h3>
+      <p>A map key must uniquely identify an object. In Kubernetes, a name alone isn't unique: a Pod and a ConfigMap can share a name, and so can two Pods in different namespaces. Build a key from all the parts:</p>
+      <pre class="go"><code>
+type NodeRegistry struct {
+	nodes map[string]*Node // keyed by "zone/name"
+}
+
+func nodeKey(zone, name string) string { return zone + "/" + name }
+</code></pre>
+
+      <h3>Storing interfaces</h3>
+      <p>A <code>map[string]Named</code> can hold any type that satisfies <code>Named</code>. You put in a <code>*Secret</code>, you get back a <code>Named</code>, and the caller uses a type assertion to get the <code>*Secret</code> back.</p>
+
+      <h3>Sorting</h3>
+      <p>Map iteration order is random, so a list built by ranging over a map must be sorted before you return it. Go has two ways:</p>
+      <pre class="go"><code>
+// sort.Slice: "less" function comparing elements by index
+sort.Slice(nodes, func(i, j int) bool {
+	return nodes[i].Name &lt; nodes[j].Name
+})
+
+// slices.SortFunc (Go 1.21+): compare function returning -1, 0 or +1
+slices.SortFunc(nodes, func(a, b *Node) int {
+	return strings.Compare(a.Name, b.Name)
+})
+
+// Sort by zone, then name (Go 1.22+): cmp.Or returns the first non-zero result
+slices.SortFunc(nodes, func(a, b *Node) int {
+	return cmp.Or(
+		strings.Compare(a.Zone, b.Zone),
+		strings.Compare(a.Name, b.Name),
+	)
+})
+</code></pre>
+      <div class="callout tip">
+        <span class="tag">Tip</span>
+        <p><code>slices</code> and <code>cmp</code> are in the standard library: <code>import "slices"</code>. If your editor auto-imports <code>golang.org/x/exp/slices</code>, that's an older experimental copy; switch to the standard one.</p>
+      </div>
+
+      <h3>The store hands out pointers</h3>
+      <p>When the map holds pointers, a <code>Get</code> returns the <em>same</em> pointer that's stored. If the caller modifies it, they've modified the stored object, with no <code>Update</code> call.</p>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Informer caches work exactly like this. Objects you get from a lister are shared with the cache, so the rule is: <strong>never modify them</strong>. Call <code>obj.DeepCopy()</code>, change the copy, then send it with <code>Update</code>.</p>
+      </div>
+
+      <div class="check" id="l2-delete-missing">
+        <p class="prompt">You want <code>Remove(key)</code> to return an error when the key doesn't exist. Is <code>delete(m, key)</code> enough?</p>
+        <div class="options">
+          <button>Yes, `delete` panics on a missing key</button>
+          <button>Yes, `delete` returns `false` on a missing key</button>
+          <button data-ok>No, `delete` is a silent no-op on a missing key; check with comma-ok first</button>
+        </div>
+        <div class="explain"><p><code>delete</code> returns nothing and never fails. Look the key up with <code>_, ok := m[key]</code> first if missing keys should be an error.</p></div>
+      </div>
+
+      <div class="check" id="l2-shared-pointer">
+        <p class="prompt">The registry stores <code>*Node</code>. A caller does <code>n, _ := reg.Get("a", "worker-1")</code> and then <code>n.Unschedulable = true</code>. What does the next <code>Get</code> return?</p>
+        <div class="options">
+          <button data-ok>A node with `Unschedulable == true`: the stored node was changed</button>
+          <button>The original node; `Get` returned a copy</button>
+          <button>An error; stored objects are read-only</button>
+        </div>
+        <div class="explain"><p>Both the map and the caller hold the same pointer. That's convenient here and dangerous in an informer cache, which is why Kubernetes code calls <code>DeepCopy()</code> before changing anything.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="exercises" class="next">
+      <h2 data-short="Now do the exercises">Now do the exercises</h2>
+      <p>Work through the three files in <code>lessons/02-interfaces-errors/</code>, in this order:</p>
+      <ol>
+        <li><code>object.go</code>: <code>ObjectMeta</code> getters (embedding), <code>GetKind</code> on each type, and <code>Describe</code> with a type switch.</li>
+        <li><code>errors.go</code>: a <code>StatusError</code> type, its constructors, and <code>IsNotFound</code> / <code>IsAlreadyExists</code> that still work on wrapped errors.</li>
+        <li><code>store.go</code>: <code>Create</code>, <code>Get</code>, <code>Delete</code> and a sorted <code>List</code>.</li>
+      </ol>
+      <pre class="sh"><code>
+go test ./lessons/02-interfaces-errors/
+go test -v -run 'TestNew|TestErrorHelpers' ./lessons/02-interfaces-errors/   # errors only
+</code></pre>
+      <p>Fix the first failure first: the store tests depend on your error constructors.</p>
+    </section>
+
+    <nav class="pager" aria-label="Lessons">
+      <a href="../01-basics/tutorial.html">← Lesson 01: Basics</a>
+      <a href="../03-encoding/tutorial.html">Lesson 03: Encoding →</a>
+    </nav>
+  </article>
+</div>
+<script src="../assets/tutorial.js"></script>
+</body>
+</html>

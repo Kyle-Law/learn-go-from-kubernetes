@@ -1,6 +1,10 @@
 package objects
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+	"strings"
+)
 
 // Store is a toy in-memory API server. It stores any Object, keyed by
 // kind + namespace + name (e.g. "Pod/default/web").
@@ -55,7 +59,7 @@ func (s *Store) Delete(kind, namespace, name string) error {
 	return NewNotFound(kind, name)
 }
 
-func IsSameNameSpace(obj Object, namespace string) bool {
+func isSameNamespace(obj Object, namespace string) bool {
 	return namespace == "" || obj.GetNamespace() == namespace
 }
 
@@ -66,16 +70,32 @@ func (s *Store) List(kind, namespace string) []Object {
 	var out []Object
 	// FILTER & APPEND
 	for _, obj := range s.objects {
-		if obj.GetKind() == kind && IsSameNameSpace(obj, namespace) {
+		if obj.GetKind() == kind && isSameNamespace(obj, namespace) {
 			out = append(out, obj)
 		}
 	}
 	// SORT
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].GetNamespace() != out[j].GetNamespace() {
-			return out[i].GetNamespace() < out[j].GetNamespace()
-		}
-		return out[i].GetName() < out[j].GetName()
+	// sort.Slice(out, func(i, j int) bool {
+	// 	if out[i].GetNamespace() != out[j].GetNamespace() {
+	// 		return out[i].GetNamespace() < out[j].GetNamespace()
+	// 	}
+	// 	return out[i].GetName() < out[j].GetName()
+	// })
+
+	// > 1.21
+	// slices.SortFunc(out, func(a, b Object) int {
+	// 	if a.GetNamespace() != b.GetNamespace() {
+	// 		return strings.Compare(a.GetNamespace(), b.GetNamespace())
+	// 	}
+	// 	return strings.Compare(a.GetName(), b.GetName())
+	// })
+
+	// > 1.22
+	slices.SortFunc(out, func(a, b Object) int {
+		return cmp.Or(
+			strings.Compare(a.GetNamespace(), b.GetNamespace()),
+			strings.Compare(a.GetName(), b.GetName()),
+		)
 	})
 
 	return out

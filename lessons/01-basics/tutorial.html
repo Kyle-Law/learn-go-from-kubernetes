@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 01 · Go Basics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/tutorial.css">
+</head>
+<body>
+<div class="progress" aria-hidden="true"></div>
+<div class="layout">
+  <nav class="toc" aria-label="Contents">
+    <details open>
+      <summary>Lesson 01 contents</summary>
+      <ol></ol>
+      <p class="score" aria-live="polite"></p>
+    </details>
+  </nav>
+
+  <article>
+    <header>
+      <p class="eyebrow">lessons/01-basics</p>
+      <h1>Go basics: modelling a Pod</h1>
+      <p class="lede">You already know what a Pod looks like in YAML. In this tutorial you'll learn the Go you need to describe one in code: structs, slices, maps, methods, and the testing workflow you'll use for every lesson.</p>
+      <ul class="meta">
+        <li>About 30 minutes</li>
+        <li>11 self-checks</li>
+        <li>Then: <code>pod.go</code> exercises</li>
+      </ul>
+    </header>
+
+    <!-- ===================================================== -->
+    <section id="first-program">
+      <h2 data-short="Your first Go file">Your first Go file</h2>
+      <p>Every Go file starts with a <code>package</code> line. Here is a complete program:</p>
+      <pre class="go" data-label="main.go"><code>
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello from a pod")
+}
+</code></pre>
+      <ul>
+        <li><code>package main</code> plus <code>func main()</code> makes a program you can run. Any other package name (like <code>basics</code> in this lesson) is a library that other code or tests use.</li>
+        <li><code>import "fmt"</code> pulls in the standard library's formatting package. Unused imports are a <em>compile error</em>, not a warning.</li>
+        <li>Braces are required, and the opening <code>{</code> must sit on the same line. Run <code>gofmt</code> (most editors do it on save) and never think about formatting again.</li>
+      </ul>
+
+      <h3>Packages are folders</h3>
+      <p>All <code>.go</code> files in one folder belong to the same package and can see each other's code. That's why <code>pod_test.go</code> can call functions from <code>pod.go</code> with no import.</p>
+      <pre class="sh"><code>
+go run .                         # build and run package main in this folder
+go test ./lessons/01-basics/     # run one package's tests
+go test ./...                    # run every package under here
+go vet ./...                     # catch common mistakes the compiler allows
+</code></pre>
+
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p>Always start folder paths with <code>./</code>. <code>go test lessons/01-basics</code> fails with <em>"is not in std"</em> because, without <code>./</code>, Go reads the path as an import path like <code>encoding/json</code> and looks in the standard library.</p>
+      </div>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>The module name in <code>go.mod</code> (<code>github.com/Kyle-Law/learn-go-from-kubernetes</code>) works like an API group: it's the prefix that makes every package path globally unique. <code>k8s.io/api/core/v1</code> is "module <code>k8s.io/api</code>, folder <code>core/v1</code>".</p>
+      </div>
+
+      <div class="check" id="l1-unused-import">
+        <p class="prompt">You add <code>import "strings"</code> to a file but never use it. What happens on <code>go build</code>?</p>
+        <div class="options">
+          <button>It builds, with a warning</button>
+          <button data-ok>Compile error: `"strings" imported and not used`</button>
+          <button>It builds; the compiler strips it</button>
+        </div>
+        <div class="explain"><p>Go treats unused imports and unused local variables as errors to keep code clean. Editors with <code>gopls</code> add and remove imports for you automatically.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="variables">
+      <h2 data-short="Variables & zero values">Variables, types, and zero values</h2>
+      <pre class="go"><code>
+var replicas int32 = 3   // explicit type
+var image = "nginx:1.27" // type inferred: string
+ready := true            // short form, only inside functions
+
+var restarts int         // no value given: restarts == 0
+</code></pre>
+      <p><code>:=</code> declares <em>and</em> assigns. Use it inside functions for almost everything. <code>=</code> assigns to a variable that already exists.</p>
+
+      <h3>Zero values</h3>
+      <p>Every variable starts at its type's <strong>zero value</strong>. There's no "undefined" and no uninitialized memory.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Type</th><th>Zero value</th></tr></thead>
+          <tbody>
+            <tr><td><code>int</code>, <code>int32</code>, <code>float64</code></td><td><code>0</code></td></tr>
+            <tr><td><code>string</code></td><td><code>""</code> (never <code>nil</code>)</td></tr>
+            <tr><td><code>bool</code></td><td><code>false</code></td></tr>
+            <tr><td>pointers, slices, maps, interfaces, channels, functions</td><td><code>nil</code></td></tr>
+            <tr><td>structs</td><td>every field at its own zero value</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Zero values are like fields you leave out of a manifest. A Pod with no <code>restartPolicy</code> still has one; it's just the default. Go code is written so the zero value is useful whenever possible.</p>
+      </div>
+
+      <div class="check" id="l1-zero-string">
+        <p class="prompt">What does this print?</p>
+        <pre class="go"><code>
+var namespace string
+fmt.Println(namespace == "", namespace == nil)
+</code></pre>
+        <div class="options">
+          <button>`true true`</button>
+          <button>`false true`</button>
+          <button data-ok>It doesn't compile</button>
+        </div>
+        <div class="explain"><p>A <code>string</code> can never be <code>nil</code>, so comparing it to <code>nil</code> is a compile error. Its zero value is <code>""</code>. Only pointers, slices, maps, interfaces, channels and functions can be <code>nil</code>.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="structs">
+      <h2 data-short="Structs">Structs: your resource schemas</h2>
+      <p>A struct groups named fields, exactly like a section of a manifest.</p>
+      <pre class="go"><code>
+type ContainerPort struct {
+	Name          string
+	ContainerPort int32
+	Protocol      string
+}
+
+// Create one with a composite literal. Name the fields.
+p := ContainerPort{Name: "http", ContainerPort: 8080}
+
+fmt.Println(p.ContainerPort) // 8080
+fmt.Println(p.Protocol)      // "" (omitted, so zero value)
+p.Protocol = "TCP"
+fmt.Printf("%+v\n", p)       // {Name:http ContainerPort:8080 Protocol:TCP}
+</code></pre>
+      <p>Structs can contain other structs and slices of structs, so you can nest them as deeply as a real <code>PodSpec</code>.</p>
+
+      <h3>Exported vs unexported</h3>
+      <p>Go has no <code>public</code> or <code>private</code> keywords. The first letter decides:</p>
+      <ul>
+        <li><code>Name</code>, <code>ContainerPort</code>, <code>NewStore</code>: capitalized, so <strong>exported</strong>. Other packages can use them.</li>
+        <li><code>name</code>, <code>readyCount</code>, <code>key</code>: lowercase, so <strong>unexported</strong>. Only code in the same package can use them.</li>
+      </ul>
+      <p>This applies to types, functions, methods, struct fields, constants and variables.</p>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Open <code>k8s.io/api/core/v1/types.go</code> and you'll find <code>type Pod struct</code>, <code>type PodSpec struct</code>, <code>type Container struct</code>: the Go version of every schema you've written YAML for. Every field is exported so that other packages, like client-go, can read it.</p>
+      </div>
+
+      <div class="check" id="l1-literal">
+        <p class="prompt">Which field values does <code>c</code> end up with?</p>
+        <pre class="go"><code>
+type Probe struct {
+	Path    string
+	Port    int32
+	Timeout int32
+}
+c := Probe{Path: "/healthz"}
+</code></pre>
+        <div class="options">
+          <button data-ok>`Path` is `"/healthz"`; `Port` and `Timeout` are `0`</button>
+          <button>Compile error: `Port` and `Timeout` are missing</button>
+          <button>`Port` and `Timeout` are `nil`</button>
+        </div>
+        <div class="explain"><p>Fields you leave out of a literal get their zero value. An <code>int32</code> can't be <code>nil</code>; its zero value is <code>0</code>.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="named-types">
+      <h2 data-short="Named types & constants">Named types and constants: Go's enums</h2>
+      <p>Go has no <code>enum</code> keyword. Instead you declare a new type based on <code>string</code> (or <code>int</code>) and a set of constants of that type:</p>
+      <pre class="go"><code>
+type RestartPolicy string
+
+const (
+	RestartAlways    RestartPolicy = "Always"
+	RestartOnFailure RestartPolicy = "OnFailure"
+	RestartNever     RestartPolicy = "Never"
+)
+
+var policy RestartPolicy = RestartAlways
+if policy == RestartNever {
+	// ...
+}
+</code></pre>
+      <p>The named type documents intent and lets the compiler stop you mixing up unrelated strings: a plain <code>string</code> variable can't be assigned to a <code>RestartPolicy</code> without an explicit conversion, <code>RestartPolicy(s)</code>.</p>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>This is exactly how <code>corev1.PodPhase</code>, <code>corev1.RestartPolicy</code> and <code>corev1.ServiceType</code> are defined. The <code>Phase</code> type in <code>pod.go</code> copies that pattern.</p>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="slices">
+      <h2 data-short="Slices">Slices: lists like <code>spec.containers</code></h2>
+      <p>A slice is a growable, ordered list. Its type is written <code>[]T</code>.</p>
+      <pre class="go"><code>
+envs := []string{"LOG_LEVEL", "PORT"}
+fmt.Println(len(envs))     // 2
+fmt.Println(envs[0])       // "LOG_LEVEL"
+
+envs = append(envs, "DEBUG") // append returns the new slice: always reassign it
+</code></pre>
+
+      <h3>Looping with <code>range</code></h3>
+      <pre class="go"><code>
+for i, name := range envs {
+	fmt.Println(i, name)    // index and value
+}
+for _, name := range envs { // _ throws away the index
+	fmt.Println(name)
+}
+for i := range envs {       // index only
+	fmt.Println(i)
+}
+</code></pre>
+
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p>The value variable in <code>range</code> is a <strong>copy</strong> of the element. Changing it doesn't change the slice:</p>
+        <pre class="go"><code>
+for _, p := range ports {
+	p.Protocol = "TCP"         // changes the copy only
+}
+for i := range ports {
+	ports[i].Protocol = "TCP"  // changes the real element
+}
+</code></pre>
+      </div>
+
+      <h3>nil slices are fine</h3>
+      <p>A slice declared with <code>var</code> is <code>nil</code>, and that's normal: <code>len</code> is 0, <code>range</code> runs zero times, and <code>append</code> allocates storage when it needs to.</p>
+      <pre class="go"><code>
+var names []string          // nil
+names = append(names, "web") // works: ["web"]
+</code></pre>
+
+      <div class="check" id="l1-append">
+        <p class="prompt">What happens with this line?</p>
+        <pre class="go"><code>
+append(envs, "DEBUG")
+</code></pre>
+        <div class="options">
+          <button>It adds `"DEBUG"` to `envs`</button>
+          <button data-ok>Compile error: the result of `append` is not used</button>
+          <button>It runs, but nothing changes</button>
+        </div>
+        <div class="explain"><p><code>append</code> may need to allocate a new, bigger array, so it <em>returns</em> the slice instead of changing it in place. Go refuses to compile a call that throws that result away. Write <code>envs = append(envs, "DEBUG")</code>.</p></div>
+      </div>
+
+      <div class="check" id="l1-range-copy">
+        <p class="prompt"><code>pods</code> holds two pods, both in phase <code>"Pending"</code>. What's the phase of <code>pods[0]</code> afterwards?</p>
+        <pre class="go"><code>
+for _, p := range pods {
+	p.Phase = "Running"
+}
+</code></pre>
+        <div class="options">
+          <button>`"Running"`</button>
+          <button data-ok>`"Pending"`</button>
+          <button>It panics</button>
+        </div>
+        <div class="explain"><p><code>p</code> is a copy of each element, so the slice is unchanged. To modify elements, loop with the index: <code>for i := range pods { pods[i].Phase = "Running" }</code>.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="maps">
+      <h2 data-short="Maps">Maps: labels and annotations</h2>
+      <p>A map stores key/value pairs. Its type is <code>map[K]V</code>, and <code>metadata.labels</code> is a <code>map[string]string</code>.</p>
+      <pre class="go"><code>
+annotations := map[string]string{
+	"team":  "payments",
+	"owner": "alice",
+}
+annotations["oncall"] = "bob"   // add or overwrite
+delete(annotations, "owner")    // remove (no-op if missing)
+fmt.Println(len(annotations))   // 2
+</code></pre>
+
+      <h3>Reading: the "comma ok" idiom</h3>
+      <p>Reading a missing key doesn't fail. It returns the value type's zero value. To tell "missing" from "present but empty", ask for a second result:</p>
+      <pre class="go"><code>
+owner := annotations["owner"]       // "" whether missing OR set to ""
+owner, ok := annotations["owner"]   // ok is false only if the key is missing
+
+if team, ok := annotations["team"]; ok {
+	fmt.Println("owned by", team)   // team and ok exist only inside this if
+}
+</code></pre>
+
+      <h3>Making maps</h3>
+      <pre class="go"><code>
+var a map[string]int          // nil map: reads work, writes PANIC
+b := map[string]int{}         // empty, ready to use
+c := make(map[string]int)     // same as b
+c["restarts"]++               // missing key reads as 0, so this sets it to 1
+</code></pre>
+
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p>Writing to a <code>nil</code> map panics with <em>"assignment to entry in nil map"</em>. A struct's map field starts as <code>nil</code>, so check and <code>make</code> it before writing. A nil <em>slice</em> is fine to append to; a nil <em>map</em> is not fine to write to.</p>
+      </div>
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p>Map iteration order is <strong>random</strong>, on purpose, and changes between runs. If order matters, copy the keys to a slice and sort it.</p>
+      </div>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>A label selector like <code>-l app=web,tier=frontend</code> is just a <code>map[string]string</code> too. A pod matches when every key in the selector exists in the pod's labels with the same value. You'll implement that check in the exercises, and the comma-ok idiom is the key to getting the edge cases right.</p>
+      </div>
+
+      <div class="check" id="l1-nil-map-write">
+        <p class="prompt">What happens?</p>
+        <pre class="go"><code>
+type Node struct {
+	Name   string
+	Taints map[string]string
+}
+var n Node
+n.Taints["dedicated"] = "gpu"
+</code></pre>
+        <div class="options">
+          <button>`n.Taints` becomes `{"dedicated": "gpu"}`</button>
+          <button>Compile error</button>
+          <button data-ok>Runtime panic: assignment to entry in nil map</button>
+        </div>
+        <div class="explain"><p><code>n.Taints</code> is a nil map, and the compiler can't catch writes to it. Initialize it first with <code>n.Taints = make(map[string]string)</code>.</p></div>
+      </div>
+
+      <div class="check" id="l1-comma-ok">
+        <p class="prompt"><code>labels</code> is <code>{"app": "web"}</code>. What are <code>v</code> and <code>ok</code>?</p>
+        <pre class="go"><code>
+v, ok := labels["tier"]
+</code></pre>
+        <div class="options">
+          <button data-ok>`v` is `""`, `ok` is `false`</button>
+          <button>`v` is `nil`, `ok` is `false`</button>
+          <button>It panics: the key doesn't exist</button>
+        </div>
+        <div class="explain"><p>Missing keys read as the zero value, <code>""</code> for strings, with <code>ok == false</code>. That's how you tell "not set" apart from "set to an empty string".</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="control-flow">
+      <h2 data-short="Control flow">Control flow</h2>
+      <h3><code>if</code></h3>
+      <p>No parentheses, braces always required. An <code>if</code> can start with a short statement whose variables live only inside the <code>if</code>/<code>else</code>:</p>
+      <pre class="go"><code>
+if restarts > 5 {
+	fmt.Println("crash looping")
+} else if restarts > 0 {
+	fmt.Println("flaky")
+}
+</code></pre>
+      <h3><code>for</code> is the only loop</h3>
+      <pre class="go"><code>
+for i := 0; i &lt; 3; i++ { }   // classic
+for attempts &lt; 5 { }         // like "while"
+for { }                       // forever (use break or return to leave)
+for _, c := range containers { // over a slice, map, string or channel
+	if c.Image == "" {
+		continue // skip to the next iteration
+	}
+}
+</code></pre>
+      <h3>Guard clauses: return early</h3>
+      <p>Idiomatic Go handles the "no" cases first and returns, keeping the happy path unindented:</p>
+      <pre class="go"><code>
+func canSchedule(n Node) bool {
+	if n.Unschedulable {
+		return false
+	}
+	if len(n.Taints) > 0 {
+		return false
+	}
+	return true
+}
+</code></pre>
+      <h3><code>switch</code></h3>
+      <pre class="go"><code>
+switch policy {
+case RestartAlways:
+	fmt.Println("always restart")
+case RestartOnFailure, RestartNever: // several values in one case
+	fmt.Println("maybe not")
+default:
+	fmt.Println("unknown")
+}
+</code></pre>
+      <p>Cases don't fall through, so there's no <code>break</code> to forget.</p>
+
+      <div class="check" id="l1-guard">
+        <p class="prompt">You want to keep only the nodes in zone <code>"a"</code>. Which loop body does that?</p>
+        <div class="options">
+          <button>`if n.Zone == "a" { continue }; out = append(out, n)`</button>
+          <button data-ok>`if n.Zone != "a" { continue }; out = append(out, n)`</button>
+          <button>`if n.Zone == "a" { break }; out = append(out, n)`</button>
+        </div>
+        <div class="explain"><p><code>continue</code> means "skip this one", so its condition must describe what you want to <em>reject</em>. <code>break</code> would stop the whole loop.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="functions">
+      <h2 data-short="Functions">Functions</h2>
+      <pre class="go"><code>
+// Types come AFTER names. The return type comes last.
+func scale(current, delta int32) int32 {  // current and delta are both int32
+	return current + delta
+}
+
+// Functions can return several values.
+func splitImage(image string) (string, string) {
+	name, tag, found := strings.Cut(image, ":")
+	if !found {
+		return name, "latest"
+	}
+	return name, tag
+}
+
+name, tag := splitImage("nginx:1.27") // "nginx", "1.27"
+_, tag = splitImage("busybox")        // ignore the first result
+</code></pre>
+      <p>Multiple return values are how Go reports errors (<code>value, err</code>) and lookups (<code>value, ok</code>). You'll use them constantly from lesson 2 on.</p>
+      <p>Arguments are passed <strong>by value</strong>: a function gets its own copy of a struct. Slices and maps are small headers that point to shared data, so a function <em>can</em> change their elements.</p>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="methods">
+      <h2 data-short="Methods & receivers">Methods and receivers</h2>
+      <p>A method is a function attached to a type. The <strong>receiver</strong> goes in parentheses before the name:</p>
+      <pre class="go"><code>
+type Node struct {
+	Name          string
+	Unschedulable bool
+	Labels        map[string]string
+}
+
+// Value receiver: n is a copy. Good for reading.
+func (n Node) Schedulable() bool {
+	return !n.Unschedulable
+}
+
+// Pointer receiver: n points at the caller's Node. Needed to modify it.
+func (n *Node) Cordon() {
+	n.Unschedulable = true
+}
+
+node := Node{Name: "worker-1"}
+node.Cordon()                   // Go passes &amp;node for you automatically
+fmt.Println(node.Schedulable()) // false
+</code></pre>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Use a pointer receiver <code>(n *Node)</code> when…</th><th>A value receiver <code>(n Node)</code> is fine when…</th></tr></thead>
+          <tbody>
+            <tr><td>the method changes the struct</td><td>the method only reads</td></tr>
+            <tr><td>the struct is large (avoids copying)</td><td>the struct is small</td></tr>
+            <tr><td>other methods on the type already use pointers (be consistent)</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p>With a value receiver, assigning a new map to <code>n.Labels</code> only changes the copy. Writing into an <em>existing</em> map does reach the caller, because the copy points at the same map. So a value-receiver bug can hide until the map happens to be nil. If a method modifies anything, use a pointer receiver.</p>
+      </div>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Generated methods such as <code>pod.DeepCopy()</code> and <code>pod.GetName()</code> all have pointer receivers, which is why client-go always works with <code>*corev1.Pod</code> rather than <code>corev1.Pod</code>.</p>
+      </div>
+
+      <div class="check" id="l1-value-receiver">
+        <p class="prompt">After <code>n.Cordon()</code>, what is <code>n.Unschedulable</code>?</p>
+        <pre class="go"><code>
+func (n Node) Cordon() {   // note: value receiver
+	n.Unschedulable = true
+}
+
+n := Node{Name: "worker-1"}
+n.Cordon()
+</code></pre>
+        <div class="options">
+          <button>`true`</button>
+          <button data-ok>`false`</button>
+          <button>Compile error: can't assign to a receiver</button>
+        </div>
+        <div class="explain"><p><code>Cordon</code> received a copy of <code>n</code> and changed the copy. Change the receiver to <code>(n *Node)</code> and it works.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="fmt">
+      <h2 data-short="Formatting strings">Formatting strings with <code>fmt</code></h2>
+      <pre class="go"><code>
+s := fmt.Sprintf("%s/%s", "default", "web") // returns a string: "default/web"
+fmt.Printf("%d restarts\n", 3)              // prints; add \n yourself
+fmt.Println("a", 1, true)                   // prints with spaces and a newline
+</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Verb</th><th>Prints</th><th>Example output</th></tr></thead>
+          <tbody>
+            <tr><td><code>%s</code></td><td>a string</td><td><code>web</code></td></tr>
+            <tr><td><code>%q</code></td><td>a quoted string</td><td><code>"web"</code></td></tr>
+            <tr><td><code>%d</code></td><td>an integer</td><td><code>3</code></td></tr>
+            <tr><td><code>%v</code></td><td>any value, default format</td><td><code>{web 3}</code></td></tr>
+            <tr><td><code>%+v</code></td><td>a struct with field names</td><td><code>{Name:web Replicas:3}</code></td></tr>
+            <tr><td><code>%T</code></td><td>the value's type</td><td><code>main.Deployment</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout tip">
+        <span class="tag">Tip</span>
+        <p><code>Sprintf</code> can't check its arguments at compile time. A wrong count or type prints markers like <code>%!d(MISSING)</code> instead of failing. <code>go vet</code> catches these, so run it often.</p>
+      </div>
+
+      <div class="check" id="l1-sprintf">
+        <p class="prompt">What does <code>fmt.Sprintf("%d/%d", 2)</code> return?</p>
+        <div class="options">
+          <button>`"2/0"`</button>
+          <button data-ok>`"2/%!d(MISSING)"`</button>
+          <button>A compile error</button>
+        </div>
+        <div class="explain"><p>Missing arguments become an error marker in the output, not a compile error. <code>go vet</code> would warn you about this line.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="testing">
+      <h2 data-short="Reading the tests">Tests: how you'll know you're done</h2>
+      <p>Test files end in <code>_test.go</code>. Each test is a function named <code>TestXxx</code> that takes a <code>*testing.T</code>. Most Go tests, including the ones in Kubernetes, are <strong>table-driven</strong>:</p>
+      <pre class="go" data-label="example_test.go"><code>
+func TestSplitImage(t *testing.T) {
+	tests := []struct {      // a slice of anonymous structs: the "table"
+		name     string
+		image    string
+		wantName string
+		wantTag  string
+	}{
+		{"with tag", "nginx:1.27", "nginx", "1.27"},
+		{"no tag", "busybox", "busybox", "latest"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { // each row becomes a named subtest
+			name, tag := splitImage(tt.image)
+			if name != tt.wantName || tag != tt.wantTag {
+				t.Errorf("splitImage(%q) = %q, %q; want %q, %q",
+					tt.image, name, tag, tt.wantName, tt.wantTag)
+			}
+		})
+	}
+}
+</code></pre>
+      <ul>
+        <li><code>t.Errorf</code> records a failure and keeps going. <code>t.Fatalf</code> stops this test immediately.</li>
+        <li>Adding a case means adding one line to the table.</li>
+        <li>Read the table before you code: the rows are the specification, including the edge cases.</li>
+      </ul>
+
+      <pre class="sh"><code>
+go test ./lessons/01-basics/                       # all tests in the lesson
+go test -v -run TestSelectorMatches ./lessons/01-basics/   # one test, verbose
+go test -run 'TestSelectorMatches/missing_key' ./lessons/01-basics/   # one row
+</code></pre>
+      <p>Subtest names have spaces replaced with underscores, as in <code>TestSelectorMatches/missing_key</code>.</p>
+
+      <div class="check" id="l1-errorf">
+        <p class="prompt">A table has 5 rows and rows 2 and 4 fail with <code>t.Errorf</code>. How many failures do you see?</p>
+        <div class="options">
+          <button data-ok>Two: every row runs</button>
+          <button>One: testing stops at the first failure</button>
+          <button>Five: the whole table fails</button>
+        </div>
+        <div class="explain"><p><code>t.Errorf</code> marks the test failed but continues, and each <code>t.Run</code> subtest is independent. You'd only stop early with <code>t.Fatalf</code>, and even then only that subtest stops.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="exercises" class="next">
+      <h2 data-short="Now do the exercises">Now do the exercises</h2>
+      <p>Open <code>lessons/01-basics/pod.go</code>. Each function has a doc comment describing exactly what to build, and <code>pod_test.go</code> has the edge cases. Suggested order:</p>
+      <ol>
+        <li><code>Pod.Ready()</code>: slices, <code>range</code>, guard clauses</li>
+        <li><code>Pod.ReadyString()</code>: counting and <code>fmt.Sprintf</code></li>
+        <li><code>SelectorMatches()</code>: maps and comma-ok</li>
+        <li><code>FilterPods()</code>: building a slice with <code>append</code>, reusing the function above</li>
+        <li><code>CountByPhase()</code>: creating and filling a map</li>
+        <li><code>Pod.SetLabel()</code>: pointer receivers and nil maps</li>
+      </ol>
+      <pre class="sh"><code>
+go test ./lessons/01-basics/
+</code></pre>
+      <p>Stuck? Re-read the matching section above, or the lesson's <code>README.md</code> for a short reference.</p>
+    </section>
+
+    <nav class="pager" aria-label="Lessons">
+      <a href="../../index.html">← Course overview</a>
+      <a href="../02-interfaces-errors/tutorial.html">Lesson 02: Interfaces &amp; errors →</a>
+    </nav>
+  </article>
+</div>
+<script src="../assets/tutorial.js"></script>
+</body>
+</html>

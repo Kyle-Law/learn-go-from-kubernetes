@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 03 · Encoding Manifests</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/tutorial.css">
+</head>
+<body>
+<div class="progress" aria-hidden="true"></div>
+<div class="layout">
+  <nav class="toc" aria-label="Contents">
+    <details open>
+      <summary>Lesson 03 contents</summary>
+      <ol></ol>
+      <p class="score" aria-live="polite"></p>
+    </details>
+  </nav>
+
+  <article>
+    <header>
+      <p class="eyebrow">lessons/03-encoding</p>
+      <h1>Encoding: from YAML manifest to Go struct</h1>
+      <p class="lede">Every manifest you <code>kubectl apply</code> becomes a Go struct inside the API server, and every <code>kubectl get -o yaml</code> turns one back into text. This tutorial shows how that conversion works and the traps that come with it.</p>
+      <ul class="meta">
+        <li>About 35 minutes</li>
+        <li>9 self-checks</li>
+        <li>Then: <code>types.go</code>, <code>manifest.go</code></li>
+      </ul>
+    </header>
+
+    <!-- ===================================================== -->
+    <section id="pipeline">
+      <h2 data-short="YAML is JSON">In Kubernetes, YAML is really JSON</h2>
+      <p>The API server speaks JSON (and protobuf). YAML is a convenience for humans. The library Kubernetes uses, <code>sigs.k8s.io/yaml</code>, works in two steps:</p>
+      <pre class="txt"><code>
+deployment.yaml ──(1) YAML → JSON──▶ {"apiVersion":"apps/v1",...} ──(2) encoding/json──▶ Deployment struct
+</code></pre>
+      <p>So everything that controls decoding is <code>encoding/json</code> behaviour, configured with <code>json</code> struct tags. You never write <code>yaml</code> tags on Kubernetes types.</p>
+      <pre class="go"><code>
+import "sigs.k8s.io/yaml"
+
+var d Deployment
+err := yaml.Unmarshal(data, &amp;d)   // data is YAML or JSON
+out, err := yaml.Marshal(&amp;d)       // struct → YAML
+</code></pre>
+      <p>A nice side effect: JSON is valid YAML, so the same function parses <code>kubectl get -o json</code> output.</p>
+
+      <div class="check" id="l3-pipeline">
+        <p class="prompt">A field has the tag <code>`json:"containerPort"`</code> and no <code>yaml</code> tag. You parse YAML with <code>sigs.k8s.io/yaml</code>. Which YAML key fills it?</p>
+        <div class="options">
+          <button data-ok>`containerPort`</button>
+          <button>`ContainerPort`: the Go field name, since there's no `yaml` tag</button>
+          <button>`container_port`</button>
+        </div>
+        <div class="explain"><p>The YAML is converted to JSON first, then <code>encoding/json</code> decodes it using the <code>json</code> tags.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="tags">
+      <h2 data-short="Struct tags">Struct tags</h2>
+      <p>A <strong>tag</strong> is a string literal written after a field's type, in backticks. The compiler ignores it; libraries read it at runtime (through reflection) to decide how to handle the field.</p>
+      <pre class="go"><code>
+type Service struct {
+	Name     string            `json:"name"`
+	Type     string            `json:"type,omitempty"`
+	Selector map[string]string `json:"selector,omitempty"`
+	Port     int32             `json:"port"`
+	cache    string            // unexported: never encoded or decoded
+	Debug    bool              `json:"-"` // exported, but always skipped
+}
+</code></pre>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tag</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td>(no tag)</td><td>key is the Go field name, e.g. <code>"Port"</code></td></tr>
+            <tr><td><code>json:"port"</code></td><td>key is <code>"port"</code></td></tr>
+            <tr><td><code>json:"type,omitempty"</code></td><td>key <code>"type"</code>; left out when the value is the zero value</td></tr>
+            <tr><td><code>json:"-"</code></td><td>never encoded or decoded</td></tr>
+            <tr><td><code>json:",inline"</code> on an embedded struct</td><td>Kubernetes convention. To <code>encoding/json</code> this just means "no name", and embedded structs without a name are flattened anyway</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Tag syntax is strict: <code>key:"value"</code>, no spaces around the colon, double quotes inside backticks. <code>go vet</code> catches malformed tags.</p>
+
+      <h3>Embedded structs are flattened</h3>
+      <pre class="go"><code>
+type TypeMeta struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+}
+type ConfigMap struct {
+	TypeMeta                   // embedded, no tag: fields appear at the top level
+	Data map[string]string `json:"data,omitempty"`
+}
+// {"apiVersion":"v1","kind":"ConfigMap","data":{...}}
+</code></pre>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>Every field in <code>k8s.io/api</code> has a <code>json</code> tag (plus a <code>protobuf</code> tag). The camelCase names you type in YAML (<code>containerPort</code>, <code>matchLabels</code>, <code>imagePullPolicy</code>) come straight from those tags.</p>
+      </div>
+
+      <div class="check" id="l3-unexported">
+        <p class="prompt">What does <code>json.Marshal</code> output for this?</p>
+        <pre class="go"><code>
+type probe struct {
+	path string `json:"path"`
+	Port int32  `json:"port"`
+}
+json.Marshal(probe{path: "/healthz", Port: 8080})
+</code></pre>
+        <div class="options">
+          <button>`{"path":"/healthz","port":8080}`</button>
+          <button data-ok>`{"port":8080}`</button>
+          <button>An error: `path` is unexported</button>
+        </div>
+        <div class="explain"><p>Only exported (capitalized) fields are encoded. A lowercase field is skipped silently, even with a tag. <code>go vet</code> warns about tags on unexported fields.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="encoding-json">
+      <h2 data-short="encoding/json">Marshal and Unmarshal</h2>
+      <pre class="go"><code>
+import "encoding/json"
+
+svc := Service{Name: "web", Port: 80}
+
+data, err := json.Marshal(svc)            // struct → []byte
+// {"name":"web","port":80}
+
+pretty, err := json.MarshalIndent(svc, "", "  ") // with newlines and indentation
+
+var back Service
+err = json.Unmarshal(data, &amp;back)           // []byte → struct: pass a POINTER
+</code></pre>
+      <ul>
+        <li>Encoders work with <code>[]byte</code>. Convert with <code>string(data)</code> to print and <code>[]byte(s)</code> to go the other way.</li>
+        <li><code>Unmarshal</code> needs a pointer so it can fill in your variable.</li>
+        <li>Map keys are sorted in the output, so encoding is deterministic.</li>
+        <li>Fields are written in struct declaration order.</li>
+      </ul>
+
+      <h3>Two decoding traps</h3>
+      <div class="callout trap">
+        <span class="tag">Trap 1: keys match case-insensitively</span>
+        <p><code>Unmarshal</code> prefers an exact match but accepts <code>"PORT"</code>, <code>"Port"</code> or <code>"port"</code> for a field tagged <code>port</code>, and accepts <code>"apiversion"</code> for an untagged <code>APIVersion</code> field. So <strong>decoding can look correct even when your tags are wrong</strong>. Encoding shows the truth: test your tags by marshalling.</p>
+      </div>
+      <div class="callout trap">
+        <span class="tag">Trap 2: unknown keys are silently ignored</span>
+        <p>A typo like <code>replcas: 3</code> doesn't fail; the field just keeps its zero value. <code>json.NewDecoder(r).DisallowUnknownFields()</code> turns this into an error. It's also why <code>kubectl apply</code> added server-side field validation: it warns about unknown fields instead of dropping them.</p>
+      </div>
+
+      <div class="check" id="l3-case">
+        <p class="prompt">The field is <code>Port int32</code> with <em>no tag</em>. What does <code>json.Unmarshal([]byte(`{"port": 80}`), &amp;svc)</code> set <code>svc.Port</code> to?</p>
+        <div class="options">
+          <button data-ok>`80`</button>
+          <button>`0`, because `"port"` doesn't match `"Port"`</button>
+          <button>It returns an error</button>
+        </div>
+        <div class="explain"><p>Decoding matches keys case-insensitively, so it works without a tag. But <code>json.Marshal</code> would write <code>"Port"</code>, which the Kubernetes API wouldn't recognize. Always tag.</p></div>
+      </div>
+
+      <div class="check" id="l3-unmarshal-ptr">
+        <p class="prompt">What's wrong with <code>json.Unmarshal(data, svc)</code>, where <code>svc</code> is a <code>Service</code> value?</p>
+        <div class="options">
+          <button>Nothing</button>
+          <button data-ok>It returns an error: Unmarshal needs a non-nil pointer (`&amp;svc`)</button>
+          <button>Compile error</button>
+        </div>
+        <div class="explain"><p>Go passes arguments by value, so <code>Unmarshal</code> would only get a copy. It detects this and returns an <code>InvalidUnmarshalError</code>. Pass <code>&amp;svc</code>. (It compiles because the parameter is <code>any</code>.)</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="omitempty">
+      <h2 data-short="omitempty">omitempty in detail</h2>
+      <p><code>omitempty</code> leaves a field out when it holds its zero value:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field type</th><th>Omitted when</th></tr></thead>
+          <tbody>
+            <tr><td><code>string</code></td><td><code>""</code></td></tr>
+            <tr><td>numbers</td><td><code>0</code></td></tr>
+            <tr><td><code>bool</code></td><td><code>false</code></td></tr>
+            <tr><td>slice, map</td><td><code>nil</code> or empty (length 0)</td></tr>
+            <tr><td>pointer, interface</td><td><code>nil</code></td></tr>
+            <tr><td><strong>struct</strong></td><td><strong>never</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout trap">
+        <span class="tag">Trap</span>
+        <p><code>omitempty</code> has no effect on a struct field: an empty struct still prints as <code>{}</code>. If a nested struct must disappear when unset, make the field a pointer (<code>*Status</code>), which <code>omitempty</code> omits when <code>nil</code>. (Go 1.24 adds an <code>omitzero</code> option for this, but this course uses Go 1.23.)</p>
+      </div>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>This is why <code>kubectl get -o yaml</code> sometimes shows <code>status: {}</code> or <code>creationTimestamp: null</code>: those fields are non-pointer structs, so they're always written.</p>
+      </div>
+
+      <div class="check" id="l3-omitempty-zero">
+        <p class="prompt">The field is <code>Replicas int32 `json:"replicas,omitempty"`</code> and you scale to zero (<code>Replicas = 0</code>). What happens when you send the JSON to the API server?</p>
+        <div class="options">
+          <button>It sends `"replicas":0` and the Deployment scales to zero</button>
+          <button data-ok>The field is omitted, so the server applies the default of 1</button>
+          <button>Marshal returns an error</button>
+        </div>
+        <div class="explain"><p><code>0</code> is the zero value, so <code>omitempty</code> drops it. A plain <code>int32</code> can't tell "zero" apart from "not set". The next section fixes this.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="pointers">
+      <h2 data-short="Pointers for optional fields">Pointers for optional fields</h2>
+      <p>A <strong>pointer</strong> holds the address of a value. <code>*int32</code> is "pointer to an int32". It gives a field three states instead of two:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Go value</th><th>JSON with <code>omitempty</code></th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>nil</code></td><td>(field omitted)</td><td>not set; use the default</td></tr>
+            <tr><td>pointer to <code>0</code></td><td><code>"replicas":0</code></td><td>explicitly zero</td></tr>
+            <tr><td>pointer to <code>3</code></td><td><code>"replicas":3</code></td><td>explicitly three</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Pointer basics</h3>
+      <pre class="go"><code>
+port := int32(8080)
+p := &amp;port         // &amp; takes the address: p is a *int32
+fmt.Println(*p)    // * dereferences: 8080
+*p = 9090          // writes through the pointer: port is now 9090
+
+var timeout *int32 // nil
+if timeout != nil { // ALWAYS check before dereferencing
+	fmt.Println(*timeout)
+}
+// *timeout here would panic: nil pointer dereference
+</code></pre>
+      <p>You can't take the address of a literal or constant: <code>&amp;3</code> and <code>&amp;"web"</code> don't compile. You need a variable first. (Struct literals are the exception: <code>&amp;Pod{}</code> is allowed.)</p>
+      <p>It's safe to return a pointer to a function's local variable or parameter. Go notices and keeps the value alive for as long as it's referenced.</p>
+      <pre class="go"><code>
+func newProbe(path string) *Probe {
+	p := Probe{Path: path, Port: 8080}
+	return &amp;p   // fine in Go (unlike C)
+}
+</code></pre>
+
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>That's why so many API fields are pointers: a Deployment's <code>Replicas *int32</code>, a Job's <code>Suspend *bool</code>, a Pod's <code>TerminationGracePeriodSeconds *int64</code>. A pointer is used wherever "unset" needs to be different from the zero value, so the server can apply a default.</p>
+      </div>
+
+      <div class="check" id="l3-nil-deref">
+        <p class="prompt"><code>spec.Replicas</code> is a <code>*int32</code> and the manifest didn't set it. What does <code>n := *spec.Replicas</code> do?</p>
+        <div class="options">
+          <button>Sets `n` to `0`</button>
+          <button>Sets `n` to `1`, the default</button>
+          <button data-ok>Panics: nil pointer dereference</button>
+        </div>
+        <div class="explain"><p>An unset pointer field is <code>nil</code>, and dereferencing <code>nil</code> panics. Check <code>if spec.Replicas != nil</code> first and choose the default yourself.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="generics">
+      <h2 data-short="A first look at generics">A first look at generics</h2>
+      <p>Setting a pointer field from a literal is clumsy: you need a temporary variable every time. A helper would be nice, but without generics you'd need one for each type: <code>Int32Ptr</code>, <code>BoolPtr</code>, <code>StringPtr</code>… Kubernetes really did have all of those.</p>
+      <p><strong>Type parameters</strong> let one function work for many types:</p>
+      <pre class="go"><code>
+// [T any] declares a type parameter T that can be any type.
+func First[T any](items []T) (T, bool) {
+	var zero T          // zero value of whatever T is
+	if len(items) == 0 {
+		return zero, false
+	}
+	return items[0], true
+}
+
+name, ok := First([]string{"web", "api"}) // T inferred as string
+port, ok := First([]int32{80, 443})       // T inferred as int32
+</code></pre>
+      <p>Go usually infers <code>T</code> from the arguments, so you rarely write <code>First[string](...)</code>. The part in brackets after <code>T</code> is a <strong>constraint</strong>: <code>any</code> allows every type, and <code>cmp.Ordered</code> allows only types that support <code>&lt;</code>:</p>
+      <pre class="go"><code>
+func Max[T cmp.Ordered](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
+}
+</code></pre>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p><code>k8s.io/utils/ptr</code> replaced the old <code>Int32Ptr</code>-style helpers with a single generic <code>ptr.To(v)</code>. You'll write your own in the exercise.</p>
+      </div>
+
+      <div class="check" id="l3-generic-infer">
+        <p class="prompt">What's the type of <code>x</code>?</p>
+        <pre class="go"><code>
+x, _ := First([]bool{true, false})
+</code></pre>
+        <div class="options">
+          <button data-ok>`bool`</button>
+          <button>`any`</button>
+          <button>`[]bool`</button>
+        </div>
+        <div class="explain"><p>Go infers <code>T = bool</code> from the <code>[]bool</code> argument, so the result type <code>T</code> is <code>bool</code>. Unlike <code>any</code>, generics keep the real type, with no type assertion needed.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="modify-in-place">
+      <h2 data-short="Editing nested slices">Editing nested slices in place</h2>
+      <p>You met the range-copy trap in lesson 1. It matters more with deeply nested types, because the path to the element gets long. Two clean ways to edit an element:</p>
+      <pre class="go"><code>
+ports := svc.Spec.Ports
+
+// 1. Index into the slice
+for i := range ports {
+	if ports[i].Name == "http" {
+		ports[i].Port = 8080
+	}
+}
+
+// 2. Take a pointer to the element
+for i := range ports {
+	p := &amp;ports[i]
+	if p.Name == "http" {
+		p.Port = 8080
+	}
+}
+</code></pre>
+      <p>Copying the slice into a local variable (<code>ports := svc.Spec.Ports</code>) is fine: the copy is a small header pointing to the <em>same</em> backing array, so element changes are visible through <code>svc.Spec.Ports</code>. Only <code>append</code> on the local copy would diverge.</p>
+
+      <div class="check" id="l3-slice-alias">
+        <p class="prompt">After this runs, what is <code>svc.Spec.Ports[0].Port</code>?</p>
+        <pre class="go"><code>
+ports := svc.Spec.Ports   // ports[0].Port was 80
+ports[0].Port = 8080
+</code></pre>
+        <div class="options">
+          <button data-ok>`8080`: both slices share the same backing array</button>
+          <button>`80`: `ports` is a copy</button>
+          <button>It depends on the slice's capacity</button>
+        </div>
+        <div class="explain"><p>Assigning a slice copies its header (pointer, length, capacity), not its elements. Unlike a <code>range</code> value variable, <code>ports[0]</code> refers to the shared element.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="errors-join">
+      <h2 data-short="Reporting every error">Reporting every problem with <code>errors.Join</code></h2>
+      <p>Validation should report <em>all</em> problems at once, not stop at the first. Collect errors in a slice and join them (Go 1.20+):</p>
+      <pre class="go"><code>
+var (
+	ErrNoPorts  = errors.New("at least one port is required")
+	ErrBadPort  = errors.New("port must be 1-65535")
+)
+
+func validateService(s *Service) error {
+	var errs []error
+	if len(s.Spec.Ports) == 0 {
+		errs = append(errs, ErrNoPorts)
+	}
+	for _, p := range s.Spec.Ports {
+		if p.Port &lt; 1 || p.Port > 65535 {
+			errs = append(errs, fmt.Errorf("port %q: %w", p.Name, ErrBadPort))
+		}
+	}
+	return errors.Join(errs...) // nil if errs is empty
+}
+</code></pre>
+      <ul>
+        <li><code>errs...</code> spreads a slice into a variadic call.</li>
+        <li><code>errors.Join</code> returns <code>nil</code> when there are no non-nil errors, so you don't need an <code>if</code>.</li>
+        <li>The joined error prints one problem per line, and <code>errors.Is(err, ErrBadPort)</code> finds any of them, even wrapped ones.</li>
+      </ul>
+      <div class="callout k8s">
+        <span class="tag">From Kubernetes</span>
+        <p>The API server's validation works the same way, using a <code>field.ErrorList</code>. That's why a bad <code>kubectl apply</code> lists every invalid field in one response.</p>
+      </div>
+
+      <div class="check" id="l3-join">
+        <p class="prompt"><code>err := errors.Join(ErrNoPorts, fmt.Errorf("port %q: %w", "http", ErrBadPort))</code>. Which is true?</p>
+        <div class="options">
+          <button>`errors.Is(err, ErrBadPort)` is false, because it's wrapped twice</button>
+          <button data-ok>`errors.Is(err, ErrNoPorts)` and `errors.Is(err, ErrBadPort)` are both true</button>
+          <button>Only the first error is kept</button>
+        </div>
+        <div class="explain"><p><code>errors.Is</code> searches every branch of a joined error and every layer of <code>%w</code> wrapping.</p></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="files">
+      <h2 data-short="Files & testdata">Reading files and <code>testdata/</code></h2>
+      <pre class="go"><code>
+data, err := os.ReadFile("testdata/service.yaml") // ([]byte, error)
+if err != nil {
+	return err
+}
+</code></pre>
+      <ul>
+        <li><code>go test</code> runs with the working directory set to the package's folder, so test files can use relative paths like <code>testdata/...</code>.</li>
+        <li>The Go tool ignores folders named <code>testdata</code> when building, so fixtures there never end up in your program.</li>
+        <li>In test helpers, call <code>t.Helper()</code> first. Failures are then reported at the line that <em>called</em> the helper, which is the line you care about.</li>
+      </ul>
+    </section>
+
+    <!-- ===================================================== -->
+    <section id="exercises" class="next">
+      <h2 data-short="Now do the exercises">Now do the exercises</h2>
+      <p>Open <code>lessons/03-encoding/</code> and look at <code>testdata/deployment.yaml</code> first: that's what you're parsing.</p>
+      <ol>
+        <li><code>types.go</code>: add <code>json</code> tags to every field (comments say which fields need <code>omitempty</code>). Check them with <code>TestToJSON</code> and <code>TestRoundTrip</code>, since decoding alone hides tag mistakes.</li>
+        <li><code>ParseDeployment</code>: wrap the parse error with <code>%w</code> and reject anything but <code>apps/v1</code> <code>Deployment</code>.</li>
+        <li><code>ToJSON</code>, <code>Ptr</code>, <code>ReplicasOrDefault</code>.</li>
+        <li><code>SetImage</code>: edit the container in place.</li>
+        <li><code>Validate</code>: collect everything and use <code>errors.Join</code>.</li>
+      </ol>
+      <pre class="sh"><code>
+go test ./lessons/03-encoding/
+go test -v -run 'TestToJSON|TestRoundTrip' ./lessons/03-encoding/   # tags only
+</code></pre>
+      <p>Two parsing tests already pass before you start. That's decoding's case-insensitive matching at work (trap 1 above).</p>
+    </section>
+
+    <nav class="pager" aria-label="Lessons">
+      <a href="../02-interfaces-errors/tutorial.html">← Lesson 02: Interfaces &amp; errors</a>
+      <a href="../../index.html">Course overview →</a>
+    </nav>
+  </article>
+</div>
+<script src="../assets/tutorial.js"></script>
+</body>
+</html>

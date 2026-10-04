@@ -1,5 +1,8 @@
 # 03 — Encoding: parsing a Deployment manifest
 
+> **New to these concepts? Start with the tutorial:** open [`tutorial.html`](tutorial.html) in a browser
+> (`open lessons/03-encoding/tutorial.html`). This README is a quick reference for while you code.
+
 Goal: make `go test ./lessons/03-encoding/` pass.
 1. **`types.go`**: add struct tags so the types read and write real Kubernetes YAML and JSON.
 2. **`manifest.go`**: parse, encode, default, edit, and validate a Deployment.

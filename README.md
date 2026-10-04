@@ -1,6 +1,8 @@
 # Go from Kubernetes
 
 Learn Go by rebuilding the parts of Kubernetes you already know.
+
+**Tutorials online:** https://kyle-law.github.io/learn-go-from-kubernetes/
 Each lesson has a `README.md` (concepts), a `.go` file with `TODO`s, and tests.
 You're done with a lesson when its tests pass:
 
@@ -9,9 +11,19 @@ go test ./lessons/01-basics/...        # run one lesson
 go test -v -run TestSelector ./lessons/01-basics/   # run one test, verbose
 ```
 
+## How to do a lesson
+
+1. **Learn:** open `lessons/NN-*/tutorial.html` in a browser (`open lessons/01-basics/tutorial.html`).
+   It teaches the concepts with Kubernetes analogies and short self-checks.
+2. **Practice:** fill in the `TODO`s in the lesson's `.go` files until `go test` passes.
+   The lesson's `README.md` is a quick reference while you code.
+3. **Review:** take the mistakes quiz in `attempts/NN-*/`, if there is one.
+
 ## Layout
 
-- `lessons/NN-*/` — blank exercises. Start here.
+- `lessons/NN-*/tutorial.html` — the concept tutorial. Start here.
+- `lessons/NN-*/` — blank exercises (`.go` files with `TODO`s) and their tests.
+- `lessons/assets/` — shared styles and script for the tutorials.
 - `attempts/NN-*/` — my completed attempts, plus a `go-mistakes-quiz.html` per lesson
   (open it in a browser) covering the tricky parts and the mistakes I made.
   Spoilers: finish the lesson before looking.
