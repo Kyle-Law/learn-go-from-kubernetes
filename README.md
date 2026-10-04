@@ -9,6 +9,13 @@ go test ./lessons/01-basics/...        # run one lesson
 go test -v -run TestSelector ./lessons/01-basics/   # run one test, verbose
 ```
 
+## Layout
+
+- `lessons/NN-*/` — blank exercises. Start here.
+- `attempts/NN-*/` — my completed attempts, plus a `go-mistakes-quiz.html` per lesson
+  (open it in a browser) covering the tricky parts and the mistakes I made.
+  Spoilers: finish the lesson before looking.
+
 ## Roadmap
 
 | #  | Lesson                         | Go concepts                                              | The K8s thing you build                          |

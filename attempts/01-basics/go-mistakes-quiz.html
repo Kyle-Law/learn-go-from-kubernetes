@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Go mistakes, revisited</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #EEF3F6;
+    --surface: #FFFFFF;
+    --ink: #16242F;
+    --muted: #556774;
+    --line: #CFDAE1;
+    --accent: #007D9C;
+    --code-bg: #E4ECF1;
+    --pass: #2E7D4F;
+    --pass-bg: #E3F2E8;
+    --fail: #B3261E;
+    --fail-bg: #FBE7E5;
+    --kw: #7A3E9D;
+    --str: #2E7D4F;
+    --cmt: #6B7C88;
+    --term-bg: #16242F;
+    --term-ink: #DCE6EC;
+    --sans: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1A21;
+      --surface: #16242E;
+      --ink: #E4ECF1;
+      --muted: #93A4B0;
+      --line: #2A3B47;
+      --accent: #4FC7E3;
+      --code-bg: #1C2C37;
+      --pass: #6FCF97;
+      --pass-bg: #173326;
+      --fail: #F28B82;
+      --fail-bg: #3A1D1B;
+      --kw: #C79BE6;
+      --str: #8FD6A8;
+      --cmt: #7E909C;
+      --term-bg: #0A1218;
+      --term-ink: #DCE6EC;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 1.0625rem;
+    line-height: 1.55;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+
+  header h1 {
+    font-size: clamp(2rem, 6vw, 2.75rem);
+    line-height: 1.1;
+    margin: 0 0 0.75rem;
+    letter-spacing: -0.01em;
+  }
+  header h1 .gofile { font-family: var(--mono); font-weight: 600; color: var(--accent); }
+  header p { margin: 0; color: var(--muted); max-width: 36rem; }
+
+  .tally {
+    position: sticky; top: 0; z-index: 5;
+    margin: 2rem -1.25rem 1.5rem;
+    padding: 0.75rem 1.25rem;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  }
+  .tally-text { font-weight: 700; }
+  .bar { flex: 1 1 10rem; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; display: flex; }
+  .bar span { display: block; height: 100%; }
+  .bar .ok { background: var(--pass); }
+  .bar .bad { background: var(--fail); }
+
+  .topic {
+    font-size: 1.25rem;
+    margin: 2.5rem 0 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .q {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--line);
+    border-radius: 6px;
+    padding: 1.25rem 1.25rem 1.1rem;
+    margin-bottom: 1.25rem;
+  }
+  .q.correct { border-left-color: var(--pass); }
+  .q.wrong { border-left-color: var(--fail); }
+  .q .from { font-size: 0.875rem; color: var(--muted); margin: 0 0 0.35rem; }
+  .q .from code { font-size: 0.85em; }
+  .q .prompt { font-weight: 700; margin: 0 0 0.85rem; }
+
+  pre {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 0.85rem 1rem;
+    margin: 0 0 1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.875rem;
+    line-height: 1.6;
+    tab-size: 4;
+  }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .k { color: var(--kw); }
+  .s { color: var(--str); }
+  .c { color: var(--cmt); font-style: italic; }
+
+  .options { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+  .options button {
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem;
+    cursor: pointer;
+  }
+  .options button:hover:not(:disabled) { border-color: var(--accent); }
+  .options button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .options button:disabled { cursor: default; }
+  .options button.is-answer { border-color: var(--pass); background: var(--pass-bg); }
+  .options button.is-picked-wrong { border-color: var(--fail); background: var(--fail-bg); }
+  .options button.is-dim { opacity: 0.55; }
+
+  .feedback { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px dashed var(--line); }
+  .feedback[hidden] { display: none; }
+  .verdict { font-weight: 700; margin-right: 0.3rem; }
+  .correct .verdict { color: var(--pass); }
+  .wrong .verdict { color: var(--fail); }
+  .feedback p { margin: 0 0 0.5rem; }
+  .feedback p:last-child { margin-bottom: 0; }
+
+  .results { margin-top: 3rem; }
+  .results h2 { font-size: 1.25rem; margin: 0 0 0.75rem; }
+  .term {
+    background: var(--term-bg);
+    color: var(--term-ink);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+    margin: 0 0 1rem;
+  }
+  .term .pass { color: #6FCF97; }
+  .term .fail { color: #F28B82; }
+  .term .skip { color: #93A4B0; }
+  .term .sum { font-weight: 600; }
+  .actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  .actions button {
+    font: inherit; font-weight: 700;
+    padding: 0.6rem 1rem;
+    border-radius: 4px;
+    border: 2px solid var(--accent);
+    background: var(--accent);
+    color: var(--surface);
+    cursor: pointer;
+  }
+  .actions button.secondary { background: transparent; color: var(--accent); }
+  .actions button:disabled { opacity: 0.45; cursor: default; }
+  .actions button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .feedback:not([hidden]) { animation: reveal 0.2s ease-out; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Go mistakes, revisited <span class="gofile">pod.go</span></h1>
+    <p>Every question comes from a bug or slip in your pod helpers. Pick an answer to see why it's right or wrong. The test output at the bottom fills in as you go. Your answers are saved in this browser, so you can close the tab and pick up where you left off.</p>
+  </header>
+
+  <div class="tally" aria-live="polite">
+    <span class="tally-text" id="tally">0 of 0 answered</span>
+    <div class="bar" aria-hidden="true"><span class="ok" id="bar-ok"></span><span class="bad" id="bar-bad"></span></div>
+  </div>
+
+  <div id="quiz"></div>
+
+  <section class="results" aria-labelledby="results-h">
+    <h2 id="results-h">Test output</h2>
+    <div class="term" id="term"></div>
+    <div class="actions">
+      <button id="retry">Retry missed questions</button>
+      <button id="reset" class="secondary">Start over</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const QUESTIONS = [
+  // ---------- Maps ----------
+  {
+    id: "NilMapWrite", topic: "Maps", from: "CountByPhase",
+    prompt: "pods has three pods in it. What happens when this runs?",
+    code: `var counts map[Phase]int
+for _, p := range pods {
+	counts[p.Phase]++
+}`,
+    options: [
+      { t: "It panics with `assignment to entry in nil map`", ok: true },
+      { t: "Compile error: map is not initialized" },
+      { t: "It works, because missing keys start at 0" },
+      { t: "Nothing happens and `counts` stays nil" }
+    ],
+    explain: [
+      "`var` declares a nil map. Reading from a nil map is fine, but writing to one panics at runtime, and the compiler can't catch it.",
+      "Create the map first: `counts := make(map[Phase]int)`. After that, `counts[p.Phase]++` works because missing keys read as 0."
+    ]
+  },
+  {
+    id: "NilMapRead", topic: "Maps", from: "SelectorMatches",
+    prompt: "A pod has no labels, so its map is nil. What do got and ok hold?",
+    code: `var labels map[string]string
+got, ok := labels["app"]`,
+    options: [
+      { t: "`got` is `\"\"` and `ok` is `false`, no panic", ok: true },
+      { t: "It panics: you can't read from a nil map" },
+      { t: "`got` is `nil` and `ok` is `false`" },
+      { t: "Compile error: labels is never assigned" }
+    ],
+    explain: [
+      "Reads from a nil map return the value type's zero value (`\"\"` for strings) and `ok == false`.",
+      "This is why `SelectorMatches` handles unlabeled pods without a nil check. A `string` can never be `nil` in Go, so that option can't happen."
+    ]
+  },
+  {
+    id: "EmptyValueMatch", topic: "Maps", from: "SelectorMatches",
+    prompt: "selector is {\"tier\": \"\"} and labels is {\"app\": \"web\"}. What does this version return?",
+    code: `for k, want := range selector {
+	if labels[k] != want {
+		return false
+	}
+}
+return true`,
+    options: [
+      { t: "`true`, which is wrong", ok: true },
+      { t: "`false`, which is correct" },
+      { t: "It panics on the missing key" },
+      { t: "`true`, which is correct" }
+    ],
+    explain: [
+      "The missing `tier` key reads as `\"\"`, which equals `want`, so the check passes even though the pod has no `tier` label at all.",
+      "Kubernetes treats `tier=` as \"key present with an empty value\". The comma-ok check `got, ok := labels[k]; if !ok || got != want` is what makes this correct."
+    ]
+  },
+  {
+    id: "CommaOkName", topic: "Maps", from: "SelectorMatches",
+    prompt: "What's the conventional name for the blank?",
+    code: `got, ___ := labels[k]`,
+    options: [
+      { t: "`ok`", ok: true },
+      { t: "`exist`" },
+      { t: "`err`" },
+      { t: "`isSet`" }
+    ],
+    explain: [
+      "This is the \"comma ok\" idiom, and `ok` is the name every Go reader expects. The same pattern appears in type assertions (`s, ok := x.(string)`) and channel receives (`v, ok := <-ch`).",
+      "`err` would be actively misleading, because the second value is a `bool`, not an `error`."
+    ]
+  },
+
+  // ---------- Slices ----------
+  {
+    id: "NilSliceAppend", topic: "Slices", from: "FilterPods",
+    prompt: "Is this safe, given that filtered starts out nil?",
+    code: `var filtered []Pod
+filtered = append(filtered, p)`,
+    options: [
+      { t: "Yes, `append` allocates a backing array when it needs one", ok: true },
+      { t: "No, it panics just like writing to a nil map" },
+      { t: "No, you must call `make([]Pod, 0)` first" },
+      { t: "Only if `p` is non-nil" }
+    ],
+    explain: [
+      "Nil slices and nil maps behave differently. `append` on a nil slice is completely normal Go, which is why `var filteredPods []Pod` was fine in `FilterPods`.",
+      "A nil map, by contrast, must be created with `make` before you write to it."
+    ]
+  },
+  {
+    id: "AppendSyntax", topic: "Slices", from: "FilterPods",
+    prompt: "Which line adds p to filtered?",
+    code: null,
+    options: [
+      { t: "`filtered = append(filtered, p)`", ok: true },
+      { t: "`filtered.add(p)`" },
+      { t: "`append(filtered, p)`" },
+      { t: "`filtered += p`" }
+    ],
+    explain: [
+      "Slices have no methods, so `.add` doesn't exist. `append` is a built-in that returns the (possibly new) slice, and you have to assign the result back.",
+      "Calling `append(filtered, p)` on its own line is a compile error, because Go rejects an unused result from `append`."
+    ]
+  },
+  {
+    id: "AppendPerPair", topic: "Slices", from: "FilterPods",
+    prompt: "selector is {app: web, tier: frontend}. The pod has both labels. How many times does it end up in out?",
+    code: `for k, v := range selector {
+	if p.Labels[k] == v {
+		out = append(out, p)
+	}
+}`,
+    options: [
+      { t: "Twice", ok: true },
+      { t: "Once" },
+      { t: "Zero times" },
+      { t: "It depends on map iteration order" }
+    ],
+    explain: [
+      "The append runs once per matching pair, so a full match is added twice. A pod matching only `app=web` would also be added once, even though it fails the selector.",
+      "The pod should be added once, after every pair matches. Call `SelectorMatches(selector, p.Labels)` instead of looping again."
+    ]
+  },
+
+  // ---------- Control flow ----------
+  {
+    id: "InvertedContinue", topic: "Control flow", from: "FilterPods",
+    prompt: "This is called with namespace \"prod\". Which pods end up in out?",
+    code: `for _, p := range pods {
+	if namespace == "" || p.Namespace == namespace {
+		continue
+	}
+	out = append(out, p)
+}`,
+    options: [
+      { t: "Every pod that is not in prod", ok: true },
+      { t: "Only the pods in prod" },
+      { t: "Every pod" },
+      { t: "No pods" }
+    ],
+    explain: [
+      "`continue` means skip this pod. The condition describes the pods you want, so this skips exactly those and keeps the rest. With an empty namespace, it would return nothing at all.",
+      "A guard clause states the rejection condition: `if namespace != \"\" && p.Namespace != namespace { continue }`."
+    ]
+  },
+
+  // ---------- Methods & receivers ----------
+  {
+    id: "ValueReceiverNil", topic: "Methods & receivers", from: "SetLabel",
+    prompt: "pod.Labels is nil. After pod.SetLabel(\"app\", \"web\"), what does pod.Labels hold?",
+    code: `func (p Pod) SetLabel(key, value string) {
+	if p.Labels == nil {
+		p.Labels = make(map[string]string)
+	}
+	p.Labels[key] = value
+}`,
+    options: [
+      { t: "Still `nil`: the label went into a copy and was lost", ok: true },
+      { t: "`{\"app\": \"web\"}`" },
+      { t: "It panics: assignment to entry in nil map" },
+      { t: "Compile error: can't assign to a receiver field" }
+    ],
+    explain: [
+      "A value receiver gets a copy of the pod. Assigning a new map to `p.Labels` only changes the copy's field, so the caller never sees it.",
+      "With `func (p *Pod)`, the assignment updates the caller's actual pod."
+    ]
+  },
+  {
+    id: "ValueReceiverShared", topic: "Methods & receivers", from: "SetLabel",
+    prompt: "Same value-receiver method, but pod.Labels is already {\"tier\": \"db\"}. After SetLabel(\"app\", \"web\")?",
+    code: `func (p Pod) SetLabel(key, value string) {
+	if p.Labels == nil {
+		p.Labels = make(map[string]string)
+	}
+	p.Labels[key] = value
+}`,
+    options: [
+      { t: "The caller sees both `tier` and `app`", ok: true },
+      { t: "The caller sees only `tier`" },
+      { t: "The caller sees only `app`" },
+      { t: "It panics" }
+    ],
+    explain: [
+      "The copy's `Labels` field points to the same underlying map, so the write is visible to the caller.",
+      "That's what makes value-receiver bugs sneaky: the method looks correct whenever the map already exists and only fails in the nil case. Use a pointer receiver for any method that modifies the struct."
+    ]
+  },
+
+  // ---------- Formatting ----------
+  {
+    id: "SprintfArgs", topic: "Formatting", from: "ReadyString",
+    prompt: "What happens with this line?",
+    code: `return fmt.Sprintf("%d/%d", p.Containers)`,
+    options: [
+      { t: "It compiles, but the output is garbled with `%!d(MISSING)`", ok: true },
+      { t: "Compile error: wrong number of arguments" },
+      { t: "It prints something like `1/2`" },
+      { t: "It panics at runtime" }
+    ],
+    explain: [
+      "`Sprintf` accepts any number of arguments, so the compiler can't check them. The slice fills the first `%d` badly and the second has nothing, so it prints an error marker instead.",
+      "`go vet` catches this. The fix is to pass two ints: `fmt.Sprintf(\"%d/%d\", ready, len(p.Containers))`."
+    ]
+  },
+
+  // ---------- Syntax ----------
+  {
+    id: "MapTypeSyntax", topic: "Syntax", from: "SelectorMatches",
+    prompt: "Which of these is a valid Go type for a label map?",
+    code: null,
+    options: [
+      { t: "`map[string]string`", ok: true },
+      { t: "`map[string][string]`" },
+      { t: "`map<string, string>`" },
+      { t: "`map(string)string`" }
+    ],
+    explain: [
+      "The key type goes in brackets and the value type follows directly after, with no second pair of brackets.",
+      "It's a built-in type, so you can use it anywhere without declaring a named type first."
+    ]
+  },
+  {
+    id: "ParamShorthand", topic: "Syntax", from: "SelectorMatches",
+    prompt: "What is the type of selector here?",
+    code: `func SelectorMatches(selector, labels map[string]string) bool`,
+    options: [
+      { t: "`map[string]string`", ok: true },
+      { t: "It's inferred from whatever the caller passes" },
+      { t: "`string`" },
+      { t: "Compile error: selector has no type" }
+    ],
+    explain: [
+      "When consecutive parameters share a type, Go lets you write the type once at the end. This is the same as `selector map[string]string, labels map[string]string`.",
+      "Go never infers parameter types from the call site."
+    ]
+  },
+  {
+    id: "RangeKeyword", topic: "Syntax", from: "SelectorMatches",
+    prompt: "How is range normally written?",
+    code: null,
+    options: [
+      { t: "`for k, v := range selector {`", ok: true },
+      { t: "`for k, v := range(selector) {`" },
+      { t: "`for k, v in selector {`" },
+      { t: "`selector.range(func(k, v string) {`" }
+    ],
+    explain: [
+      "`range` is a keyword, not a function. The parenthesized form happens to compile, but it reads like a function call and isn't idiomatic."
+    ]
+  },
+
+  // ---------- kubectl ----------
+  {
+    id: "KubectlSpace", topic: "kubectl", from: "FilterPods comment",
+    prompt: "What goes wrong here?",
+    code: `kubectl get pods -l app=web, tier=frontend`,
+    options: [
+      { t: "The shell splits at the space, so `tier=frontend` becomes a separate argument (a pod name), not part of the selector", ok: true },
+      { t: "Nothing, kubectl trims spaces in selectors" },
+      { t: "It silently filters on `app=web` only and ignores the rest" },
+      { t: "It matches pods with either label" }
+    ],
+    explain: [
+      "The shell splits arguments on spaces before kubectl sees them. Write `-l app=web,tier=frontend` with no space, or quote the whole selector.",
+      "Instead of the filter you meant, you'll typically get an error."
+    ]
+  }
+];
+
+const state = {}; // id -> { picked: index into shuffled order, correct: bool }
+const order = {}; // id -> shuffled option array
+
+// ---- Persistence (localStorage) ----
+// Saved shape: { v: 1, order: { id: [original option indexes] }, state: { id: { picked, correct } } }
+const STORAGE_KEY = "go-mistakes-quiz:v1";
+
+function save() {
+  try {
+    const savedOrder = {};
+    QUESTIONS.forEach(q => {
+      savedOrder[q.id] = order[q.id].map(o => q.options.indexOf(o));
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, order: savedOrder, state }));
+  } catch (err) {
+    // Storage can be unavailable (private mode, strict file:// rules). The quiz still works without it.
+  }
+}
+
+function load() {
+  let data = null;
+  try {
+    data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  } catch (err) {
+    data = null;
+  }
+  QUESTIONS.forEach(q => {
+    const idx = data && data.order && data.order[q.id];
+    const valid = Array.isArray(idx) && idx.length === q.options.length &&
+      idx.every(i => Number.isInteger(i) && q.options[i]) &&
+      new Set(idx).size === idx.length;
+    // If the question changed since it was saved, drop its saved data and reshuffle.
+    if (!valid) {
+      order[q.id] = shuffle(q.options);
+      return;
+    }
+    order[q.id] = idx.map(i => q.options[i]);
+    const s = data.state && data.state[q.id];
+    if (s && Number.isInteger(s.picked) && order[q.id][s.picked]) {
+      state[q.id] = { picked: s.picked, correct: !!order[q.id][s.picked].ok };
+    }
+  });
+}
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function inline(s) {
+  // escape, then turn `x` into <code>x</code>
+  return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+function highlight(src) {
+  const re = /(\/\/.*$)|("(?:[^"\\\n]|\\.)*")|\b(func|var|for|range|if|return|const|type|map|make|append|nil|true|false|continue|string|bool|int|kubectl)\b/gm;
+  let out = "", last = 0, m;
+  while ((m = re.exec(src))) {
+    out += esc(src.slice(last, m.index));
+    const cls = m[1] ? "c" : m[2] ? "s" : "k";
+    out += '<span class="' + cls + '">' + esc(m[0]) + "</span>";
+    last = re.lastIndex;
+  }
+  return out + esc(src.slice(last));
+}
+function shuffle(a) {
+  const b = a.slice();
+  for (let i = b.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [b[i], b[j]] = [b[j], b[i]];
+  }
+  return b;
+}
+
+function renderCard(q) {
+  const s = state[q.id];
+  const opts = order[q.id];
+  const status = s ? (s.correct ? "correct" : "wrong") : "";
+  let html = '<p class="from">From <code>' + esc(q.from) + "</code></p>";
+  html += '<p class="prompt">' + inline(q.prompt) + "</p>";
+  if (q.code) html += "<pre><code>" + highlight(q.code) + "</code></pre>";
+  html += '<ul class="options">';
+  opts.forEach((o, i) => {
+    let cls = "";
+    if (s) {
+      if (o.ok) cls = "is-answer";
+      else if (i === s.picked) cls = "is-picked-wrong";
+      else cls = "is-dim";
+    }
+    html += '<li><button type="button" data-q="' + q.id + '" data-i="' + i + '" class="' + cls + '"' + (s ? " disabled" : "") + ">" + inline(o.t) + "</button></li>";
+  });
+  html += "</ul>";
+  html += '<div class="feedback" role="status"' + (s ? "" : " hidden") + ">";
+  if (s) {
+    html += "<p><span class=\"verdict\">" + (s.correct ? "Correct." : "Not quite.") + "</span>" + inline(q.explain[0]) + "</p>";
+    q.explain.slice(1).forEach(e => { html += "<p>" + inline(e) + "</p>"; });
+  }
+  html += "</div>";
+  const card = document.getElementById("q-" + q.id);
+  card.className = "q " + status;
+  card.innerHTML = html;
+}
+
+function renderAll() {
+  const root = document.getElementById("quiz");
+  root.innerHTML = "";
+  let topic = null;
+  QUESTIONS.forEach(q => {
+    if (q.topic !== topic) {
+      topic = q.topic;
+      const h = document.createElement("h2");
+      h.className = "topic";
+      h.textContent = topic;
+      root.appendChild(h);
+    }
+    const card = document.createElement("article");
+    card.id = "q-" + q.id;
+    root.appendChild(card);
+    renderCard(q);
+  });
+  updateStatus();
+}
+
+function updateStatus() {
+  const total = QUESTIONS.length;
+  const answered = Object.keys(state).length;
+  const right = Object.values(state).filter(s => s.correct).length;
+  const wrong = answered - right;
+  document.getElementById("tally").textContent =
+    answered + " of " + total + " answered, " + right + " correct";
+  document.getElementById("bar-ok").style.width = (right / total * 100) + "%";
+  document.getElementById("bar-bad").style.width = (wrong / total * 100) + "%";
+
+  let lines = [];
+  QUESTIONS.forEach(q => {
+    const s = state[q.id];
+    const name = "Test" + q.id;
+    if (!s) lines.push('<span class="skip">--- SKIP: ' + name + "</span>");
+    else if (s.correct) lines.push('<span class="pass">--- PASS: ' + name + "</span>");
+    else lines.push('<span class="fail">--- FAIL: ' + name + "</span>  (" + esc(q.from) + ")");
+  });
+  let summary;
+  if (answered === total && wrong === 0) summary = '<span class="sum pass">ok      basics/mistakes  ' + right + "/" + total + "</span>";
+  else if (wrong > 0) summary = '<span class="sum fail">FAIL    basics/mistakes  ' + right + "/" + total + (answered < total ? ", " + (total - answered) + " unanswered" : "") + "</span>";
+  else summary = '<span class="sum skip">...     basics/mistakes  ' + (total - answered) + " unanswered</span>";
+  document.getElementById("term").innerHTML = "$ go test ./mistakes -v\n" + lines.join("\n") + "\n" + summary;
+
+  document.getElementById("retry").disabled = wrong === 0;
+  save();
+}
+
+document.getElementById("quiz").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-q]");
+  if (!btn || btn.disabled) return;
+  const id = btn.dataset.q;
+  const i = Number(btn.dataset.i);
+  const q = QUESTIONS.find(x => x.id === id);
+  state[id] = { picked: i, correct: !!order[id][i].ok };
+  renderCard(q);
+  updateStatus();
+  const fb = document.querySelector("#q-" + id + " .feedback");
+  if (fb) fb.setAttribute("tabindex", "-1");
+});
+
+document.getElementById("retry").addEventListener("click", () => {
+  let first = null;
+  QUESTIONS.forEach(q => {
+    if (state[q.id] && !state[q.id].correct) {
+      delete state[q.id];
+      order[q.id] = shuffle(q.options);
+      renderCard(q);
+      if (!first) first = q.id;
+    }
+  });
+  updateStatus();
+  if (first) {
+    const el = document.getElementById("q-" + first);
+    el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    const b = el.querySelector("button");
+    if (b) b.focus({ preventScroll: true });
+  }
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  Object.keys(state).forEach(k => delete state[k]);
+  QUESTIONS.forEach(q => { order[q.id] = shuffle(q.options); });
+  renderAll();
+  window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+});
+
+load();
+renderAll();
+</script>
+</body>
+</html>

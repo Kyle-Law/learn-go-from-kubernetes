@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Go mistakes, revisited</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #EEF3F6;
+    --surface: #FFFFFF;
+    --ink: #16242F;
+    --muted: #556774;
+    --line: #CFDAE1;
+    --accent: #007D9C;
+    --code-bg: #E4ECF1;
+    --pass: #2E7D4F;
+    --pass-bg: #E3F2E8;
+    --fail: #B3261E;
+    --fail-bg: #FBE7E5;
+    --kw: #7A3E9D;
+    --str: #2E7D4F;
+    --cmt: #6B7C88;
+    --term-bg: #16242F;
+    --term-ink: #DCE6EC;
+    --sans: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1A21;
+      --surface: #16242E;
+      --ink: #E4ECF1;
+      --muted: #93A4B0;
+      --line: #2A3B47;
+      --accent: #4FC7E3;
+      --code-bg: #1C2C37;
+      --pass: #6FCF97;
+      --pass-bg: #173326;
+      --fail: #F28B82;
+      --fail-bg: #3A1D1B;
+      --kw: #C79BE6;
+      --str: #8FD6A8;
+      --cmt: #7E909C;
+      --term-bg: #0A1218;
+      --term-ink: #DCE6EC;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 1.0625rem;
+    line-height: 1.55;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+
+  header h1 {
+    font-size: clamp(2rem, 6vw, 2.75rem);
+    line-height: 1.1;
+    margin: 0 0 0.75rem;
+    letter-spacing: -0.01em;
+  }
+  header h1 .gofile { font-family: var(--mono); font-weight: 600; color: var(--accent); }
+  header p { margin: 0; color: var(--muted); max-width: 36rem; }
+
+  .tally {
+    position: sticky; top: 0; z-index: 5;
+    margin: 2rem -1.25rem 1.5rem;
+    padding: 0.75rem 1.25rem;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  }
+  .tally-text { font-weight: 700; }
+  .bar { flex: 1 1 10rem; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; display: flex; }
+  .bar span { display: block; height: 100%; }
+  .bar .ok { background: var(--pass); }
+  .bar .bad { background: var(--fail); }
+
+  .topic {
+    font-size: 1.25rem;
+    margin: 2.5rem 0 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  .q {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--line);
+    border-radius: 6px;
+    padding: 1.25rem 1.25rem 1.1rem;
+    margin-bottom: 1.25rem;
+  }
+  .q.correct { border-left-color: var(--pass); }
+  .q.wrong { border-left-color: var(--fail); }
+  .q .from { font-size: 0.875rem; color: var(--muted); margin: 0 0 0.35rem; }
+  .q .from code { font-size: 0.85em; }
+  .q .prompt { font-weight: 700; margin: 0 0 0.85rem; }
+
+  pre {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 0.85rem 1rem;
+    margin: 0 0 1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.875rem;
+    line-height: 1.6;
+    tab-size: 4;
+  }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .k { color: var(--kw); }
+  .s { color: var(--str); }
+  .c { color: var(--cmt); font-style: italic; }
+
+  .options { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+  .options button {
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem;
+    cursor: pointer;
+  }
+  .options button:hover:not(:disabled) { border-color: var(--accent); }
+  .options button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .options button:disabled { cursor: default; }
+  .options button.is-answer { border-color: var(--pass); background: var(--pass-bg); }
+  .options button.is-picked-wrong { border-color: var(--fail); background: var(--fail-bg); }
+  .options button.is-dim { opacity: 0.55; }
+
+  .feedback { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px dashed var(--line); }
+  .feedback[hidden] { display: none; }
+  .verdict { font-weight: 700; margin-right: 0.3rem; }
+  .correct .verdict { color: var(--pass); }
+  .wrong .verdict { color: var(--fail); }
+  .feedback p { margin: 0 0 0.5rem; }
+  .feedback p:last-child { margin-bottom: 0; }
+
+  .results { margin-top: 3rem; }
+  .results h2 { font-size: 1.25rem; margin: 0 0 0.75rem; }
+  .term {
+    background: var(--term-bg);
+    color: var(--term-ink);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+    margin: 0 0 1rem;
+  }
+  .term .pass { color: #6FCF97; }
+  .term .fail { color: #F28B82; }
+  .term .skip { color: #93A4B0; }
+  .term .sum { font-weight: 600; }
+  .actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  .actions button {
+    font: inherit; font-weight: 700;
+    padding: 0.6rem 1rem;
+    border-radius: 4px;
+    border: 2px solid var(--accent);
+    background: var(--accent);
+    color: var(--surface);
+    cursor: pointer;
+  }
+  .actions button.secondary { background: transparent; color: var(--accent); }
+  .actions button:disabled { opacity: 0.45; cursor: default; }
+  .actions button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .feedback:not([hidden]) { animation: reveal 0.2s ease-out; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Go mistakes, revisited <span class="gofile">objects</span></h1>
+    <p>Every question comes from your lesson 2 attempt or a trap in interfaces, errors and the toy API server. Pick an answer to see why it's right or wrong. The test output at the bottom fills in as you go. Your answers are saved in this browser, so you can close the tab and pick up where you left off.</p>
+  </header>
+
+  <div class="tally" aria-live="polite">
+    <span class="tally-text" id="tally">0 of 0 answered</span>
+    <div class="bar" aria-hidden="true"><span class="ok" id="bar-ok"></span><span class="bad" id="bar-bad"></span></div>
+  </div>
+
+  <div id="quiz"></div>
+
+  <section class="results" aria-labelledby="results-h">
+    <h2 id="results-h">Test output</h2>
+    <div class="term" id="term"></div>
+    <div class="actions">
+      <button id="retry">Retry missed questions</button>
+      <button id="reset" class="secondary">Start over</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const QUESTIONS = [
+  // ---------- Interfaces ----------
+  {
+    id: "KindCheckNoFields", topic: "Interfaces", from: "Describe (your first draft)",
+    prompt: "obj really holds a *Pod. Why doesn't this compile?",
+    code: `func Describe(obj Object) string {
+	if obj.GetKind() == "Pod" {
+		return fmt.Sprintf("%d containers", len(obj.Containers))
+	}
+	...
+}`,
+    options: [
+      { t: "`obj` has type `Object`, and `Object` only has `GetName`, `GetNamespace` and `GetKind`", ok: true },
+      { t: "It does compile, because Go sees the `GetKind()` check and narrows the type" },
+      { t: "`Containers` is unexported" },
+      { t: "You need `obj->Containers` for pointers" }
+    ],
+    explain: [
+      "The compiler only knows the static type, `Object`. A string check on `GetKind()` means nothing to it, so the fields of `*Pod` stay out of reach. That's why your first draft fell back to hard-coded counts.",
+      "A type switch (`switch o := obj.(type) { case *Pod: ... }`) or an assertion (`p, ok := obj.(*Pod)`) gives you a variable whose static type really is `*Pod`."
+    ]
+  },
+  {
+    id: "MultiTypeCase", topic: "Interfaces", from: "Describe",
+    prompt: "Inside this case, what is the type of o?",
+    code: `switch o := obj.(type) {
+case *Pod, *ConfigMap:
+	_ = o
+}`,
+    options: [
+      { t: "`Object`: a case that lists several types keeps the original interface type", ok: true },
+      { t: "`*Pod` or `*ConfigMap`, depending on the value" },
+      { t: "`any`" },
+      { t: "Compile error: only one type per case" }
+    ],
+    explain: [
+      "`o` only gets a concrete type in a case that lists exactly one type. With two, Go can't choose, so `o` stays an `Object`, and `o.Containers` would not compile.",
+      "Use separate cases when you need the concrete fields."
+    ]
+  },
+  {
+    id: "MethodSets", topic: "Interfaces", from: "object_test.go bonus",
+    prompt: "GetKind has a pointer receiver: func (p *Pod) GetKind(). What happens here?",
+    code: `var _ Object = Pod{}`,
+    options: [
+      { t: "Compile error: `Pod` does not implement `Object` (method `GetKind` has pointer receiver)", ok: true },
+      { t: "It compiles, because Go takes the address automatically" },
+      { t: "It compiles but panics at runtime" },
+      { t: "It compiles, but `GetKind` returns \"\"" }
+    ],
+    explain: [
+      "Methods with pointer receivers belong to `*Pod`'s method set, not `Pod`'s. Go auto-takes `&` when you *call* `p.GetKind()` on an addressable variable, but it won't do that when it checks whether a type satisfies an interface.",
+      "This is why client-go always works with `&corev1.Pod{}` and why `client.Object` values are pointers."
+    ]
+  },
+  {
+    id: "ImplicitService", topic: "Interfaces", from: "object_test.go",
+    prompt: "Service is declared only in the test file and never mentions Object. Why does Describe(&Service{...}) compile?",
+    code: `type Service struct {
+	ObjectMeta
+	Port int
+}
+
+func (s *Service) GetKind() string { return "Service" }`,
+    options: [
+      { t: "`*Service` has all three methods: two promoted from `ObjectMeta`, plus `GetKind`", ok: true },
+      { t: "Test files skip type checking" },
+      { t: "Go infers `implements Object` because `Service` embeds `ObjectMeta`" },
+      { t: "`Describe` takes `any`" }
+    ],
+    explain: [
+      "Interfaces are satisfied implicitly: having the methods is the whole requirement. Embedding just supplies two of them.",
+      "That's how your own CRD types later become `client.Object` without importing anything special."
+    ]
+  },
+
+  // ---------- Embedding ----------
+  {
+    id: "EmbedNotInherit", topic: "Embedding", from: "Pod",
+    prompt: "Pod embeds ObjectMeta. Does this compile?",
+    code: `var m *ObjectMeta = &Pod{}`,
+    options: [
+      { t: "No. Embedding is composition, so a `*Pod` is not an `*ObjectMeta`. Use `&p.ObjectMeta`", ok: true },
+      { t: "Yes, `Pod` is a subtype of `ObjectMeta`" },
+      { t: "Yes, but only with pointer receivers" },
+      { t: "Yes, but `m` points at an empty `ObjectMeta`" }
+    ],
+    explain: [
+      "Embedding promotes fields and methods so you can write `p.Name` and `p.GetName()`, but there is no subtype relationship. The embedded value is just a field named `ObjectMeta`.",
+      "If you need polymorphism, you use an interface, like `Object`."
+    ]
+  },
+
+  // ---------- Type assertions ----------
+  {
+    id: "AssertWithoutOk", topic: "Type assertions", from: "Store.Get callers",
+    prompt: "obj holds a *ConfigMap. What happens on each line?",
+    code: `p, ok := obj.(*Pod)   // line A
+q := obj.(*Pod)       // line B`,
+    options: [
+      { t: "A: `p` is nil, `ok` is false. B: panics", ok: true },
+      { t: "Both lines panic" },
+      { t: "Both give nil, and B also sets an error" },
+      { t: "A panics, B returns nil" }
+    ],
+    explain: [
+      "The comma-ok form never panics; it reports the mismatch. The single-value form panics with `interface conversion: ... is *ConfigMap, not *Pod`.",
+      "In controllers, an object from an informer's delete handler can be a `DeletedFinalStateUnknown` tombstone rather than your type, so always use comma-ok there."
+    ]
+  },
+
+  // ---------- Errors ----------
+  {
+    id: "WrapWithV", topic: "Errors", from: "TestErrorHelpers",
+    prompt: "err is NewNotFound(\"Pod\", \"web\"). What does IsNotFound(wrapped) return?",
+    code: `wrapped := fmt.Errorf("getting pod: %v", err)`,
+    options: [
+      { t: "`false`: `%v` only copies the text, so the `*StatusError` is gone", ok: true },
+      { t: "`true`, because `errors.As` searches the message" },
+      { t: "`true`, because any `fmt.Errorf` wraps" },
+      { t: "It panics" }
+    ],
+    explain: [
+      "Only `%w` stores the original error so `errors.Unwrap`, `errors.Is` and `errors.As` can reach it. With `%v`, the result is a brand-new error that merely contains the same words.",
+      "Rule of thumb: when you add context to an error you're returning, use `%w`."
+    ]
+  },
+  {
+    id: "AsTargetPointer", topic: "Errors", from: "ReasonForError",
+    prompt: "Note the missing &. What happens?",
+    code: `var se *StatusError
+if errors.As(err, se) {
+	return se.Reason
+}`,
+    options: [
+      { t: "It panics: `errors: target must be a non-nil pointer` (and `go vet` flags it)", ok: true },
+      { t: "It works the same as `&se`" },
+      { t: "It always returns false" },
+      { t: "Compile error: wrong argument type" }
+    ],
+    explain: [
+      "`errors.As` needs somewhere to *write* the match, so it takes a pointer to your variable. `se` itself is a nil `*StatusError`, which gives it nowhere to write.",
+      "It compiles because the parameter type is `any`. Run `go vet` regularly; it catches this."
+    ]
+  },
+  {
+    id: "CodeVsReason", topic: "Errors", from: "IsNotFound (your commented draft)",
+    prompt: "You considered checking se.Code == 404. Suppose IsAlreadyExists checked se.Code == 409 instead of the Reason. What would break in a real cluster?",
+    code: null,
+    options: [
+      { t: "It would also match `Conflict` errors (409) from updates with a stale `resourceVersion`", ok: true },
+      { t: "Nothing; code and reason always match one-to-one" },
+      { t: "HTTP codes aren't available on client errors" },
+      { t: "409 is never returned by the API server" }
+    ],
+    explain: [
+      "Several reasons share a code. In Kubernetes, `AlreadyExists` and `Conflict` are both 409, and they need very different handling: one means \"fine, it's there\" and the other means \"re-read and retry\".",
+      "`Reason` is the machine-readable cause, so check it first. That's what `apierrors.IsAlreadyExists` and `apierrors.IsConflict` do."
+    ]
+  },
+  {
+    id: "NilInterfaceTrap", topic: "Errors", from: "README bonus",
+    prompt: "What does this print?",
+    code: `func find() error {
+	var se *StatusError = nil
+	return se
+}
+
+fmt.Println(find() == nil)`,
+    options: [
+      { t: "`false`", ok: true },
+      { t: "`true`" },
+      { t: "It panics" },
+      { t: "Compile error" }
+    ],
+    explain: [
+      "An interface value is a (type, value) pair. Returning `se` produces `(*StatusError, nil)`, and an interface is only `== nil` when *both* parts are nil.",
+      "Callers would see a non-nil error and calling `.Error()` on it would panic. Return a literal `nil` for \"no error\"."
+    ]
+  },
+  {
+    id: "SameTextDifferentError", topic: "Errors", from: "TestErrorHelpers",
+    prompt: "Why must IsNotFound return false for errors.New(`Pod \"web\" not found`)?",
+    code: null,
+    options: [
+      { t: "Error text is for humans and can change; code should check the error's type or value", ok: true },
+      { t: "Because `errors.New` errors can't be compared" },
+      { t: "It shouldn't; the test is wrong" },
+      { t: "Because the message is missing the 404 code" }
+    ],
+    explain: [
+      "If code checks `strings.Contains(err.Error(), \"not found\")`, rewording a message silently breaks callers, and unrelated errors can match by accident.",
+      "Use `errors.Is` for sentinel values and `errors.As` for error types."
+    ]
+  },
+
+  // ---------- Maps & the store ----------
+  {
+    id: "DeleteMissingKey", topic: "Maps & the store", from: "Store.Delete",
+    prompt: "What does Go's built-in delete do when the key isn't in the map?",
+    code: `delete(s.objects, "Pod/default/nope")`,
+    options: [
+      { t: "Nothing: it's a silent no-op", ok: true },
+      { t: "It panics" },
+      { t: "It returns an error" },
+      { t: "It returns `false`" }
+    ],
+    explain: [
+      "`delete` has no return value and never fails, even on a nil map. That's why your `Delete` needed the comma-ok check first: without it, deleting a missing object would succeed instead of returning `NotFound`."
+    ]
+  },
+  {
+    id: "MapOrder", topic: "Maps & the store", from: "Store.List",
+    prompt: "List collects matches by ranging over s.objects but never sorts. What happens?",
+    code: null,
+    options: [
+      { t: "The order changes between runs, because Go deliberately randomizes map iteration", ok: true },
+      { t: "Items come out in insertion order" },
+      { t: "Items come out sorted by key" },
+      { t: "Order is random, but fixed for the life of the process" }
+    ],
+    explain: [
+      "Go randomizes map iteration on purpose so nobody depends on it. The test calls `List` five times to catch exactly this.",
+      "Whenever output order matters (API responses, tests, diffs), collect into a slice and sort it."
+    ]
+  },
+  {
+    id: "SharedPointer", topic: "Maps & the store", from: "Store.Get",
+    prompt: "The store holds the *Pod you created. After this, what does a second Get return?",
+    code: `obj, _ := s.Get("Pod", "default", "web")
+p := obj.(*Pod)
+p.Containers = append(p.Containers, "debug")`,
+    options: [
+      { t: "The pod with `debug` in its containers: you changed the object inside the store", ok: true },
+      { t: "The original pod, because `Get` returned a copy" },
+      { t: "It panics: objects from the store are read-only" },
+      { t: "`NotFound`, because the object was modified" }
+    ],
+    explain: [
+      "The map stores a pointer, and `Get` hands back that same pointer. There's no copy unless you make one.",
+      "Informer caches in client-go work the same way. Never modify an object from a lister; call `obj.DeepCopy()` first, then change and `Update` the copy."
+    ]
+  },
+
+  // ---------- Naming ----------
+  {
+    id: "ExportedHelper", topic: "Naming", from: "IsSameNameSpace",
+    prompt: "What does the capital I in your helper func IsSameNameSpace(...) mean?",
+    code: `func IsSameNameSpace(obj Object, namespace string) bool`,
+    options: [
+      { t: "It's exported: code in other packages can call it, so it becomes part of your package's API", ok: true },
+      { t: "Nothing; capitalization is just style" },
+      { t: "It marks the function as a boolean predicate" },
+      { t: "It makes the function a method" }
+    ],
+    explain: [
+      "In Go, the first letter decides visibility. A small internal helper should start lowercase, like `inNamespace`, so you're free to change it later.",
+      "Kubernetes spells it as one word, `Namespace`, so `NameSpace` reads oddly to Go and Kubernetes developers."
+    ]
+  }
+];
+
+const state = {}; // id -> { picked: index into shuffled order, correct: bool }
+const order = {}; // id -> shuffled option array
+
+// ---- Persistence (localStorage) ----
+// Saved shape: { v: 1, order: { id: [original option indexes] }, state: { id: { picked, correct } } }
+const STORAGE_KEY = "go-mistakes-quiz-02:v1";
+
+function save() {
+  try {
+    const savedOrder = {};
+    QUESTIONS.forEach(q => {
+      savedOrder[q.id] = order[q.id].map(o => q.options.indexOf(o));
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, order: savedOrder, state }));
+  } catch (err) {
+    // Storage can be unavailable (private mode, strict file:// rules). The quiz still works without it.
+  }
+}
+
+function load() {
+  let data = null;
+  try {
+    data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  } catch (err) {
+    data = null;
+  }
+  QUESTIONS.forEach(q => {
+    const idx = data && data.order && data.order[q.id];
+    const valid = Array.isArray(idx) && idx.length === q.options.length &&
+      idx.every(i => Number.isInteger(i) && q.options[i]) &&
+      new Set(idx).size === idx.length;
+    // If the question changed since it was saved, drop its saved data and reshuffle.
+    if (!valid) {
+      order[q.id] = shuffle(q.options);
+      return;
+    }
+    order[q.id] = idx.map(i => q.options[i]);
+    const s = data.state && data.state[q.id];
+    if (s && Number.isInteger(s.picked) && order[q.id][s.picked]) {
+      state[q.id] = { picked: s.picked, correct: !!order[q.id][s.picked].ok };
+    }
+  });
+}
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function inline(s) {
+  // escape, then turn `x` into <code>x</code>
+  return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+function highlight(src) {
+  const re = /(\/\/.*$)|("(?:[^"\\\n]|\\.)*")|\b(func|var|for|range|if|return|const|type|map|make|append|nil|true|false|continue|string|bool|int|kubectl|switch|case|struct|interface|error|any)\b/gm;
+  let out = "", last = 0, m;
+  while ((m = re.exec(src))) {
+    out += esc(src.slice(last, m.index));
+    const cls = m[1] ? "c" : m[2] ? "s" : "k";
+    out += '<span class="' + cls + '">' + esc(m[0]) + "</span>";
+    last = re.lastIndex;
+  }
+  return out + esc(src.slice(last));
+}
+function shuffle(a) {
+  const b = a.slice();
+  for (let i = b.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [b[i], b[j]] = [b[j], b[i]];
+  }
+  return b;
+}
+
+function renderCard(q) {
+  const s = state[q.id];
+  const opts = order[q.id];
+  const status = s ? (s.correct ? "correct" : "wrong") : "";
+  let html = '<p class="from">From <code>' + esc(q.from) + "</code></p>";
+  html += '<p class="prompt">' + inline(q.prompt) + "</p>";
+  if (q.code) html += "<pre><code>" + highlight(q.code) + "</code></pre>";
+  html += '<ul class="options">';
+  opts.forEach((o, i) => {
+    let cls = "";
+    if (s) {
+      if (o.ok) cls = "is-answer";
+      else if (i === s.picked) cls = "is-picked-wrong";
+      else cls = "is-dim";
+    }
+    html += '<li><button type="button" data-q="' + q.id + '" data-i="' + i + '" class="' + cls + '"' + (s ? " disabled" : "") + ">" + inline(o.t) + "</button></li>";
+  });
+  html += "</ul>";
+  html += '<div class="feedback" role="status"' + (s ? "" : " hidden") + ">";
+  if (s) {
+    html += "<p><span class=\"verdict\">" + (s.correct ? "Correct." : "Not quite.") + "</span>" + inline(q.explain[0]) + "</p>";
+    q.explain.slice(1).forEach(e => { html += "<p>" + inline(e) + "</p>"; });
+  }
+  html += "</div>";
+  const card = document.getElementById("q-" + q.id);
+  card.className = "q " + status;
+  card.innerHTML = html;
+}
+
+function renderAll() {
+  const root = document.getElementById("quiz");
+  root.innerHTML = "";
+  let topic = null;
+  QUESTIONS.forEach(q => {
+    if (q.topic !== topic) {
+      topic = q.topic;
+      const h = document.createElement("h2");
+      h.className = "topic";
+      h.textContent = topic;
+      root.appendChild(h);
+    }
+    const card = document.createElement("article");
+    card.id = "q-" + q.id;
+    root.appendChild(card);
+    renderCard(q);
+  });
+  updateStatus();
+}
+
+function updateStatus() {
+  const total = QUESTIONS.length;
+  const answered = Object.keys(state).length;
+  const right = Object.values(state).filter(s => s.correct).length;
+  const wrong = answered - right;
+  document.getElementById("tally").textContent =
+    answered + " of " + total + " answered, " + right + " correct";
+  document.getElementById("bar-ok").style.width = (right / total * 100) + "%";
+  document.getElementById("bar-bad").style.width = (wrong / total * 100) + "%";
+
+  let lines = [];
+  QUESTIONS.forEach(q => {
+    const s = state[q.id];
+    const name = "Test" + q.id;
+    if (!s) lines.push('<span class="skip">--- SKIP: ' + name + "</span>");
+    else if (s.correct) lines.push('<span class="pass">--- PASS: ' + name + "</span>");
+    else lines.push('<span class="fail">--- FAIL: ' + name + "</span>  (" + esc(q.from) + ")");
+  });
+  let summary;
+  if (answered === total && wrong === 0) summary = '<span class="sum pass">ok      objects/mistakes  ' + right + "/" + total + "</span>";
+  else if (wrong > 0) summary = '<span class="sum fail">FAIL    objects/mistakes  ' + right + "/" + total + (answered < total ? ", " + (total - answered) + " unanswered" : "") + "</span>";
+  else summary = '<span class="sum skip">...     objects/mistakes  ' + (total - answered) + " unanswered</span>";
+  document.getElementById("term").innerHTML = "$ go test ./mistakes -v\n" + lines.join("\n") + "\n" + summary;
+
+  document.getElementById("retry").disabled = wrong === 0;
+  save();
+}
+
+document.getElementById("quiz").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-q]");
+  if (!btn || btn.disabled) return;
+  const id = btn.dataset.q;
+  const i = Number(btn.dataset.i);
+  const q = QUESTIONS.find(x => x.id === id);
+  state[id] = { picked: i, correct: !!order[id][i].ok };
+  renderCard(q);
+  updateStatus();
+  const fb = document.querySelector("#q-" + id + " .feedback");
+  if (fb) fb.setAttribute("tabindex", "-1");
+});
+
+document.getElementById("retry").addEventListener("click", () => {
+  let first = null;
+  QUESTIONS.forEach(q => {
+    if (state[q.id] && !state[q.id].correct) {
+      delete state[q.id];
+      order[q.id] = shuffle(q.options);
+      renderCard(q);
+      if (!first) first = q.id;
+    }
+  });
+  updateStatus();
+  if (first) {
+    const el = document.getElementById("q-" + first);
+    el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    const b = el.querySelector("button");
+    if (b) b.focus({ preventScroll: true });
+  }
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  Object.keys(state).forEach(k => delete state[k]);
+  QUESTIONS.forEach(q => { order[q.id] = shuffle(q.options); });
+  renderAll();
+  window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+});
+
+load();
+renderAll();
+</script>
+</body>
+</html>
